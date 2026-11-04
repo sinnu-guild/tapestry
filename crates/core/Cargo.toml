@@ -1,0 +1,9 @@
+[package]
+name = "tapestry-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Camera brain for Tapestry: ONVIF pan/tilt + motion events, FFmpeg streams, recording. No external dependencies."
+
+[dependencies]
+# Intentionally empty: everything here is std-only so it builds anywhere, offline.
