@@ -7,3 +7,5 @@
 //! Deliberately dependency-free (std only), so it builds offline and is easy
 //! to audit.
 
+pub mod xml;
+
