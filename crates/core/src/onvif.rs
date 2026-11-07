@@ -372,6 +372,130 @@ impl OnvifClient {
     pub fn has_ptz(&self) -> bool {
         self.ptz_url.is_some() && self.profile_token.is_some()
     }
+
+    /// Start moving. `pan`/`tilt` are velocities in -1.0..=1.0 (right/up positive).
+    pub fn continuous_move(&self, pan: f32, tilt: f32) -> Result<()> {
+        let (url, tok) = self.ptz()?;
+        self.call(
+            url,
+            &format!(
+                r#"<tptz:ContinuousMove><tptz:ProfileToken>{}</tptz:ProfileToken><tptz:Velocity><tt:PanTilt x="{:.3}" y="{:.3}"/></tptz:Velocity></tptz:ContinuousMove>"#,
+                xml::escape(tok),
+                pan.clamp(-1.0, 1.0),
+                tilt.clamp(-1.0, 1.0)
+            ),
+        )
+        .map(|_| ())
+    }
+
+    pub fn stop(&self) -> Result<()> {
+        let (url, tok) = self.ptz()?;
+        self.call(
+            url,
+            &format!(
+                "<tptz:Stop><tptz:ProfileToken>{}</tptz:ProfileToken><tptz:PanTilt>true</tptz:PanTilt><tptz:Zoom>false</tptz:Zoom></tptz:Stop>",
+                xml::escape(tok)
+            ),
+        )
+        .map(|_| ())
+    }
+
+    /// Nudge by a relative amount in the camera's normalised space (-1.0..=1.0).
+    pub fn relative_move(&self, pan: f32, tilt: f32) -> Result<()> {
+        let (url, tok) = self.ptz()?;
+        self.call(
+            url,
+            &format!(
+                r#"<tptz:RelativeMove><tptz:ProfileToken>{}</tptz:ProfileToken><tptz:Translation><tt:PanTilt x="{:.4}" y="{:.4}"/></tptz:Translation></tptz:RelativeMove>"#,
+                xml::escape(tok),
+                pan.clamp(-1.0, 1.0),
+                tilt.clamp(-1.0, 1.0)
+            ),
+        )
+        .map(|_| ())
+    }
+
+    pub fn presets(&self) -> Result<Vec<Preset>> {
+        let (url, tok) = self.ptz()?;
+        let body = self.call(
+            url,
+            &format!("<tptz:GetPresets><tptz:ProfileToken>{}</tptz:ProfileToken></tptz:GetPresets>", xml::escape(tok)),
+        )?;
+        Ok(body
+            .find_all("Preset")
+            .into_iter()
+            .filter_map(|p| {
+                let token = p.attr("token")?.to_string();
+                let name = p.find_text("Name").filter(|n| !n.is_empty()).unwrap_or_else(|| format!("Preset {token}"));
+                Some(Preset { token, name })
+            })
+            .collect())
+    }
+
+    pub fn goto_preset(&self, preset_token: &str) -> Result<()> {
+        let (url, tok) = self.ptz()?;
+        self.call(
+            url,
+            &format!(
+                "<tptz:GotoPreset><tptz:ProfileToken>{}</tptz:ProfileToken><tptz:PresetToken>{}</tptz:PresetToken></tptz:GotoPreset>",
+                xml::escape(tok),
+                xml::escape(preset_token)
+            ),
+        )
+        .map(|_| ())
+    }
+
+    // ----- events ---------------------------------------------------------
+
+    pub fn subscribe(&self, lifetime_secs: u32) -> Result<Subscription> {
+        let url = self.events_url.clone().ok_or_else(|| OnvifError::Fault("camera has no events service".into()))?;
+        let body = self.call(
+            &url,
+            &format!(
+                "<tev:CreatePullPointSubscription><tev:InitialTerminationTime>PT{lifetime_secs}S</tev:InitialTerminationTime></tev:CreatePullPointSubscription>"
+            ),
+        )?;
+        let address = body
+            .find("SubscriptionReference")
+            .and_then(|r| r.find_text("Address"))
+            .filter(|a| !a.is_empty())
+            .ok_or_else(|| OnvifError::Parse("no subscription address".into()))?;
+        Ok(Subscription { address: self.fix_host(&address) })
+    }
+
+    /// Long-poll for events. Blocks up to `wait_secs` on the camera side.
+    pub fn pull(&self, sub: &Subscription, wait_secs: u32) -> Result<Vec<Notification>> {
+        let body = self.call_with(
+            &sub.address,
+            &format!("<tev:PullMessages><tev:Timeout>PT{wait_secs}S</tev:Timeout><tev:MessageLimit>32</tev:MessageLimit></tev:PullMessages>"),
+            true,
+            Some(("http://www.onvif.org/ver10/events/wsdl/PullPointSubscription/PullMessagesRequest", &sub.address)),
+            self.timeout + Duration::from_secs(wait_secs as u64),
+        )?;
+        Ok(parse_notifications(&body))
+    }
+
+    pub fn renew(&self, sub: &Subscription, lifetime_secs: u32) -> Result<()> {
+        self.call_with(
+            &sub.address,
+            &format!("<wsnt:Renew><wsnt:TerminationTime>PT{lifetime_secs}S</wsnt:TerminationTime></wsnt:Renew>"),
+            true,
+            Some(("http://docs.oasis-open.org/wsn/bw-2/SubscriptionManager/RenewRequest", &sub.address)),
+            self.timeout,
+        )
+        .map(|_| ())
+    }
+
+    pub fn unsubscribe(&self, sub: &Subscription) -> Result<()> {
+        self.call_with(
+            &sub.address,
+            "<wsnt:Unsubscribe/>",
+            true,
+            Some(("http://docs.oasis-open.org/wsn/bw-2/SubscriptionManager/UnsubscribeRequest", &sub.address)),
+            self.timeout,
+        )
+        .map(|_| ())
+    }
 }
 
 fn host_port(host: &str, port: u16) -> String {
@@ -429,3 +553,58 @@ pub fn parse_notifications(body: &Element) -> Vec<Notification> {
         .collect()
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn digest_matches_spec_example() {
+        // Classic WS-Security example from the OASIS UsernameToken profile docs.
+        let nonce = crate::crypto::base64_decode("LKqI6G/AikKCQrN0zqZFlg==").unwrap();
+        assert_eq!(password_digest(&nonce, "2010-09-16T07:50:45Z", "userpassword"), "tuOSpGlFlIXsozq4HFNeeGeFLEI=");
+    }
+
+    #[test]
+    fn parses_tapo_style_motion() {
+        let doc = r#"<env:Envelope xmlns:env="e"><env:Body><tev:PullMessagesResponse>
+<tev:CurrentTime>2026-11-20T11:00:00Z</tev:CurrentTime>
+<wsnt:NotificationMessage>
+ <wsnt:Topic Dialect="http://www.onvif.org/ver10/tev/topicExpression/ConcreteSet">tns1:RuleEngine/CellMotionDetector/Motion</wsnt:Topic>
+ <wsnt:Message><tt:Message UtcTime="2026-11-20T11:00:00Z" PropertyOperation="Changed">
+   <tt:Source><tt:SimpleItem Name="VideoSourceConfigurationToken" Value="vsconf"/></tt:Source>
+   <tt:Data><tt:SimpleItem Name="IsMotion" Value="true"/></tt:Data>
+ </tt:Message></wsnt:Message>
+</wsnt:NotificationMessage>
+<wsnt:NotificationMessage>
+ <wsnt:Topic>tns1:VideoSource/MotionAlarm</wsnt:Topic>
+ <wsnt:Message><tt:Message PropertyOperation="Initialized"><tt:Data><tt:SimpleItem Name="State" Value="false"/></tt:Data></tt:Message></wsnt:Message>
+</wsnt:NotificationMessage>
+<wsnt:NotificationMessage>
+ <wsnt:Topic>tns1:RuleEngine/TamperDetector/Tamper</wsnt:Topic>
+ <wsnt:Message><tt:Message><tt:Data><tt:SimpleItem Name="IsTamper" Value="true"/></tt:Data></tt:Message></wsnt:Message>
+</wsnt:NotificationMessage>
+</tev:PullMessagesResponse></env:Body></env:Envelope>"#;
+        let root = xml::parse(doc).unwrap();
+        let n = parse_notifications(&root);
+        assert_eq!(n.len(), 3);
+        assert_eq!(n[0].operation, "Changed");
+        assert_eq!(n[0].is_motion(), Some(true));
+        assert_eq!(n[1].is_motion(), Some(false));
+        assert_eq!(n[2].detection(), Some(("Tamper".to_string(), true)));
+        assert_eq!(n[2].is_motion(), None);
+    }
+
+    #[test]
+    fn fault_classification() {
+        let doc = r#"<s:Envelope xmlns:s="x"><s:Body><s:Fault><s:Code><s:Value>s:Sender</s:Value><s:Subcode><s:Value>ter:NotAuthorized</s:Value></s:Subcode></s:Code><s:Reason><s:Text xml:lang="en">Sender not Authorized</s:Text></s:Reason></s:Fault></s:Body></s:Envelope>"#;
+        let root = xml::parse(doc).unwrap();
+        let e = classify_fault(root.find("Fault").unwrap(), 400);
+        assert!(matches!(e, OnvifError::Auth(_)), "{e:?}");
+    }
+
+    #[test]
+    fn fix_host_rewrites_foreign_ip() {
+        let c = OnvifClient::new("192.168.1.50", 2020, "u", "p");
+        assert_eq!(c.fix_host("http://10.0.0.1:2020/event-1_2020"), "http://192.168.1.50:2020/event-1_2020");
+    }
+}
