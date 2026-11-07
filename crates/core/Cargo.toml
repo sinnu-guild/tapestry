@@ -7,3 +7,7 @@ description = "Camera brain for Tapestry: ONVIF pan/tilt + motion events, FFmpeg
 
 [dependencies]
 # Intentionally empty: everything here is std-only so it builds anywhere, offline.
+
+[[bin]]
+name = "tapestry-probe"
+path = "src/bin/tapestry-probe.rs"
