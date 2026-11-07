@@ -9,6 +9,7 @@
 
 pub mod crypto;
 pub mod http;
+pub mod onvif;
 pub mod time;
 pub mod xml;
 
