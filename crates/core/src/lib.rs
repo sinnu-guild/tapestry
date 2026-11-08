@@ -7,9 +7,11 @@
 //! Deliberately dependency-free (std only), so it builds offline and is easy
 //! to audit.
 
+pub mod config;
 pub mod crypto;
 pub mod http;
 pub mod onvif;
 pub mod time;
 pub mod xml;
 
+pub use config::{Camera, Config, Quality, RecordMode};
