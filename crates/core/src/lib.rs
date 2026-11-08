@@ -9,6 +9,7 @@
 
 pub mod config;
 pub mod crypto;
+pub mod ffmpeg;
 pub mod http;
 pub mod onvif;
 pub mod time;
