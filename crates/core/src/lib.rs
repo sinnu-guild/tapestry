@@ -11,10 +11,12 @@ pub mod config;
 pub mod crypto;
 pub mod ffmpeg;
 pub mod http;
+pub mod link;
 pub mod onvif;
 pub mod stream;
 pub mod time;
 pub mod xml;
 
 pub use config::{Camera, Config, Quality, RecordMode};
+pub use link::PtzCommand;
 pub use stream::{Frame, StreamSpec, StreamStatus, VideoStream};
