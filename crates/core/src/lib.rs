@@ -7,6 +7,7 @@
 //! Deliberately dependency-free (std only), so it builds offline and is easy
 //! to audit.
 
+pub mod clips;
 pub mod config;
 pub mod crypto;
 pub mod ffmpeg;
