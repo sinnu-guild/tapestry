@@ -13,6 +13,7 @@ pub mod ffmpeg;
 pub mod http;
 pub mod link;
 pub mod onvif;
+pub mod recorder;
 pub mod stream;
 pub mod time;
 pub mod xml;
