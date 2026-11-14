@@ -10,6 +10,7 @@
 pub mod clips;
 pub mod config;
 pub mod crypto;
+pub mod engine;
 pub mod ffmpeg;
 pub mod http;
 pub mod link;
@@ -20,5 +21,6 @@ pub mod time;
 pub mod xml;
 
 pub use config::{Camera, Config, Quality, RecordMode};
+pub use engine::{CameraState, Engine, EngineOptions, LinkState, LogEntry, LogLevel};
 pub use link::PtzCommand;
 pub use stream::{Frame, StreamSpec, StreamStatus, VideoStream};

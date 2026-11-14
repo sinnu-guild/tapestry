@@ -407,4 +407,120 @@ impl Worker {
             }
         }
     }
+
+    fn wants_recording(&self, i: usize, cam: &Camera) -> bool {
+        let rt = &self.cams[i];
+        let manual = rt.manual_until.map_or(false, |t| Instant::now() < t);
+        if manual {
+            return true;
+        }
+        if !cam.record {
+            return false;
+        }
+        match self.cfg.record_mode {
+            RecordMode::Off => false,
+            RecordMode::Continuous => true,
+            RecordMode::Motion => {
+                let motion = self.state.lock().unwrap()[i].motion;
+                motion
+                    || rt.last_motion_instant.map_or(false, |t| t.elapsed() < Duration::from_secs(self.cfg.post_roll_secs as u64))
+            }
+        }
+    }
+
+    fn tick_recorders(&mut self) {
+        for i in 0..self.cams.len() {
+            let cam = self.cfg.cameras[i].clone();
+            let want = self.wants_recording(i, &cam);
+
+            // Expire manual recording flag in shared state.
+            if self.cams[i].manual_until.map_or(false, |t| Instant::now() >= t) {
+                self.cams[i].manual_until = None;
+                self.state.lock().unwrap()[i].manual_until = None;
+            }
+
+            if self.cams[i].recorder.is_none() {
+                if !want {
+                    continue;
+                }
+                let Some(ff) = self.ffmpeg.clone() else {
+                    let mut st = self.state.lock().unwrap();
+                    if st[i].record_error.is_none() {
+                        st[i].record_error = Some("FFmpeg not found".into());
+                    }
+                    continue;
+                };
+                self.cams[i].recorder = Some(Recorder::new(
+                    ff,
+                    cam.rtsp_url(Quality::Main),
+                    self.cfg.recordings_dir.join(cam.slug()),
+                    self.namer.clone(),
+                    Duration::from_secs(self.cfg.max_clip_secs as u64),
+                ));
+            }
+
+            let events = self.cams[i].recorder.as_mut().unwrap().update(want);
+            if events.is_empty() {
+                continue;
+            }
+            let name = cam.name.clone();
+            for ev in events {
+                match ev {
+                    RecorderEvent::Started(p) => {
+                        let mut st = self.state.lock().unwrap();
+                        st[i].recording = Some(p);
+                        st[i].record_error = None;
+                    }
+                    RecorderEvent::Finished(p) => {
+                        let mut st = self.state.lock().unwrap();
+                        if st[i].recording.as_ref() == Some(&p) {
+                            st[i].recording = None;
+                        }
+                        drop(st);
+                        self.push_log(
+                            Some(i),
+                            LogLevel::Info,
+                            format!("{name}: saved clip {}", p.file_name().unwrap_or_default().to_string_lossy()),
+                        );
+                    }
+                    RecorderEvent::Failed(e) => {
+                        let first = {
+                            let mut st = self.state.lock().unwrap();
+                            st[i].recording = None;
+                            let first = st[i].record_error.as_deref() != Some(e.as_str());
+                            st[i].record_error = Some(e.clone());
+                            first
+                        };
+                        if first {
+                            self.push_log(Some(i), LogLevel::Warn, format!("{name}: recording failed — {e}"));
+                        }
+                    }
+                }
+            }
+            if !self.cams[i].recorder.as_ref().unwrap().is_recording() {
+                self.state.lock().unwrap()[i].recording = None;
+            }
+            self.wake();
+        }
+    }
+
+    fn cleanup(&mut self) {
+        let protect: Vec<PathBuf> =
+            self.cams.iter().filter_map(|c| c.recorder.as_ref().and_then(|r| r.current().map(|p| p.to_path_buf()))).collect();
+        let max = self.cfg.max_storage_gb as u64 * 1024 * 1024 * 1024;
+        let r = clips::cleanup(&self.cfg.recordings_dir, self.cfg.keep_days, max, &protect, SystemTime::now());
+        if r.deleted > 0 {
+            self.push_log(
+                None,
+                LogLevel::Info,
+                format!("Cleanup: removed {} old clip(s), freed {:.1} GB", r.deleted, r.freed_bytes as f64 / 1e9),
+            );
+        }
+        if self.cfg.keep_days > 0 {
+            let before = crate::time::unix_now() - self.cfg.keep_days as i64 * 86400;
+            for cam in &self.cfg.cameras {
+                let _ = clips::prune_motion(&clips::motion_log_path(&self.cfg.recordings_dir, &cam.slug()), before);
+            }
+        }
+    }
 }
