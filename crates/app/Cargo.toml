@@ -1,0 +1,12 @@
+[package]
+name = "tapestry"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "A desktop wall for your Tapo cameras: live grid, pan/tilt, motion clips."
+
+[dependencies]
+tapestry-core = { path = "../core" }
+# Pinned so the UI code matches the egui API it was written against.
+eframe = "=0.29.1"
+chrono = "0.4"
