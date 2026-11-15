@@ -537,4 +537,275 @@ impl TapestryApp {
     }
 
     // ----- chrome -----------------------------------------------------------------
+
+    fn top_bar(&mut self, ctx: &egui::Context) {
+        egui::TopBottomPanel::top("top")
+            .frame(egui::Frame::none().fill(theme::PANEL).inner_margin(egui::Margin::symmetric(12.0, 8.0)))
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new("TAPESTRY").strong().size(15.0).color(theme::AMBER));
+                    ui.add_space(10.0);
+                    let cams = self.cams.clone();
+                    for (i, c) in cams.iter().enumerate() {
+                        let (dot, tip) = status_dot(c);
+                        let mut text = RichText::new(format!("{}  {}", i + 1, c.name)).size(13.0);
+                        if c.motion {
+                            text = text.color(theme::MOTION).strong();
+                        }
+                        let chip = ui.add(egui::Button::new(text).fill(theme::RAISED).rounding(12.0));
+                        // Status dot drawn over the chip's left padding.
+                        let p = chip.rect.left_center() + egui::vec2(-2.0, 0.0);
+                        ui.painter().circle_filled(p, 4.0, dot);
+                        let chip = chip.on_hover_text(tip);
+                        if chip.clicked() {
+                            self.open_focus(ctx, i);
+                        }
+                    }
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.button("⚙ Settings").clicked() {
+                            self.settings = Some(SettingsDraft::new(&self.cfg, false));
+                        }
+                        let pin = if self.cfg.always_on_top { "📌 Pinned" } else { "📌 Pin" };
+                        if ui
+                            .selectable_label(self.cfg.always_on_top, pin)
+                            .on_hover_text("Keep Tapestry above other windows (P)")
+                            .clicked()
+                        {
+                            self.toggle_pin(ctx);
+                        }
+                        if ui
+                            .selectable_label(self.show_clips, "🎞 Clips")
+                            .on_hover_text("Recorded clips and motion timeline (C)")
+                            .clicked()
+                        {
+                            self.show_clips = !self.show_clips;
+                        }
+                        let unseen = self.engine.as_ref().map(|e| e.log_version()).unwrap_or(0).saturating_sub(self.log_seen);
+                        let label = if unseen > 0 && !self.show_activity {
+                            format!("🔔 Activity ({unseen})")
+                        } else {
+                            "🔔 Activity".into()
+                        };
+                        if ui.selectable_label(self.show_activity, label).clicked() {
+                            self.show_activity = !self.show_activity;
+                        }
+                        let rec: Vec<&str> =
+                            self.cams.iter().filter(|c| c.recording.is_some()).map(|c| c.name.as_str()).collect();
+                        if !rec.is_empty() {
+                            let pulse = pulse(ui.ctx(), 1.2);
+                            ui.label(
+                                RichText::new(format!("● REC {}", rec.len()))
+                                    .color(theme::MOTION.gamma_multiply(0.55 + 0.45 * pulse))
+                                    .strong(),
+                            )
+                            .on_hover_text(format!("Recording: {}", rec.join(", ")));
+                        }
+                    });
+                });
+            });
+    }
+
+    fn banners(&mut self, ctx: &egui::Context) {
+        if self.ffmpeg.is_none() {
+            egui::TopBottomPanel::top("ffmpeg-banner")
+                .frame(
+                    egui::Frame::none()
+                        .fill(Color32::from_rgb(0x3A, 0x2A, 0x10))
+                        .inner_margin(egui::Margin::symmetric(12.0, 8.0)),
+                )
+                .show(ctx, |ui| {
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label(RichText::new("FFmpeg not found.").strong().color(theme::WARN));
+                        ui.label("Tapestry uses it for video. Install it in PowerShell with");
+                        ui.code("winget install Gyan.FFmpeg");
+                        if ui.small_button("Copy").clicked() {
+                            ui.output_mut(|o| o.copied_text = "winget install Gyan.FFmpeg".into());
+                        }
+                        ui.label("then restart Tapestry — or set its location in Settings.");
+                        if ui.small_button("Check again").clicked() {
+                            self.restart(ui.ctx());
+                        }
+                    });
+                });
+        }
+    }
+
+    fn bottom_bar(&mut self, ctx: &egui::Context) {
+        egui::TopBottomPanel::bottom("bottom")
+            .frame(egui::Frame::none().fill(theme::PANEL).inner_margin(egui::Margin::symmetric(12.0, 5.0)))
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    let last = self.engine.as_ref().and_then(|e| e.log().last().cloned());
+                    if let Some(l) = last {
+                        let color = match l.level {
+                            tapestry_core::LogLevel::Motion => theme::MOTION,
+                            tapestry_core::LogLevel::Warn => theme::WARN,
+                            tapestry_core::LogLevel::Info => theme::MUTED,
+                        };
+                        ui.label(RichText::new(util::hhmm(l.at)).color(theme::MUTED).small());
+                        ui.label(RichText::new(l.text).color(color).small());
+                    }
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.label(
+                            RichText::new(chrono::Local::now().format("%a %d %b  %H:%M").to_string()).color(theme::MUTED).small(),
+                        );
+                        ui.separator();
+                        let mode = match self.cfg.record_mode {
+                            tapestry_core::RecordMode::Off => "Recording off",
+                            tapestry_core::RecordMode::Motion => "Records on motion",
+                            tapestry_core::RecordMode::Continuous => "Recording continuously",
+                        };
+                        ui.label(RichText::new(mode).color(theme::MUTED).small());
+                        ui.separator();
+                        ui.label(
+                            RichText::new("1-9 camera · Esc grid · C clips · P pin · F fullscreen").color(theme::MUTED).small(),
+                        );
+                    });
+                });
+            });
+    }
+
+    fn activity_window(&mut self, ctx: &egui::Context) {
+        if !self.show_activity {
+            return;
+        }
+        let Some(engine) = &self.engine else { return };
+        self.log_seen = engine.log_version();
+        let log = engine.log();
+        let mut open = true;
+        egui::Window::new("Activity").open(&mut open).default_width(420.0).default_height(360.0).show(ctx, |ui| {
+            egui::ScrollArea::vertical().auto_shrink([false, false]).stick_to_bottom(true).show(ui, |ui| {
+                if log.is_empty() {
+                    ui.weak("Nothing yet.");
+                }
+                for l in &log {
+                    let color = match l.level {
+                        tapestry_core::LogLevel::Motion => theme::MOTION,
+                        tapestry_core::LogLevel::Warn => theme::WARN,
+                        tapestry_core::LogLevel::Info => theme::TEXT,
+                    };
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new(util::hhmmss(l.at)).monospace().color(theme::MUTED));
+                        ui.label(RichText::new(&l.text).color(color));
+                    });
+                }
+            });
+        });
+        self.show_activity = open;
+    }
+
+    fn toasts(&mut self, ctx: &egui::Context) {
+        if self.toasts.is_empty() {
+            return;
+        }
+        egui::Area::new(egui::Id::new("toasts"))
+            .anchor(egui::Align2::RIGHT_BOTTOM, egui::vec2(-16.0, -40.0))
+            .interactable(false)
+            .show(ctx, |ui| {
+                for (_, text, color) in &self.toasts {
+                    egui::Frame::none()
+                        .fill(theme::RAISED)
+                        .stroke(egui::Stroke::new(1.0_f32, *color))
+                        .rounding(8.0)
+                        .inner_margin(egui::Margin::symmetric(12.0, 8.0))
+                        .show(ui, |ui| {
+                            ui.set_max_width(460.0);
+                            ui.label(RichText::new(text).color(theme::TEXT));
+                        });
+                    ui.add_space(6.0);
+                }
+            });
+    }
+}
+
+impl eframe::App for TapestryApp {
+    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        if ctx.input(|i| i.viewport().close_requested()) && !self.closing {
+            // Finish any recording cleanly before the window goes.
+            self.closing = true;
+            self.stop_ptz();
+            // Stop every FFmpeg we started and wait for them to exit.
+            let mut streams: Vec<&mut VideoStream> = self.tiles.iter_mut().filter_map(|t| t.stream.as_mut()).collect();
+            if let Some(s) = self.focus.as_mut().and_then(|f| f.view.stream.as_mut()) {
+                streams.push(s);
+            }
+            if let Some(s) = self.playback.as_mut().and_then(|p| p.view.stream.as_mut()) {
+                streams.push(s);
+            }
+            for s in &streams {
+                s.request_stop();
+            }
+            for s in streams {
+                s.stop();
+            }
+            self.tiles.clear();
+            self.focus = None;
+            self.playback = None;
+            if let Some(mut e) = self.engine.take() {
+                e.shutdown();
+            }
+            return;
+        }
+
+        self.poll(ctx);
+        self.upload(ctx);
+        self.keys(ctx);
+
+        self.top_bar(ctx);
+        self.banners(ctx);
+        self.bottom_bar(ctx);
+        if self.show_clips {
+            self.clips_panel(ctx);
+        }
+        egui::CentralPanel::default().frame(egui::Frame::none().fill(theme::BG).inner_margin(egui::Margin::same(8.0))).show(
+            ctx,
+            |ui| match self.center {
+                Center::Grid => self.grid_view(ui),
+                Center::Focus => self.focus_view(ui),
+                Center::Playback => self.playback_view(ui),
+            },
+        );
+        self.settings_window(ctx);
+        self.activity_window(ctx);
+        self.toasts(ctx);
+
+        // Keep clocks, "x min ago" and pulses moving even without new frames.
+        let animating = self.cams.iter().any(|c| c.motion || c.recording.is_some()) || !self.toasts.is_empty();
+        ctx.request_repaint_after(if animating { Duration::from_millis(50) } else { Duration::from_secs(1) });
+    }
+}
+
+/// Repaint the UI when a background thread has something new.
+pub fn waker(ctx: &egui::Context) -> tapestry_core::stream::Waker {
+    let ctx = ctx.clone();
+    Arc::new(move || ctx.request_repaint())
+}
+
+/// 0..1 sine pulse with the given period.
+pub fn pulse(ctx: &egui::Context, period: f32) -> f32 {
+    let t = ctx.input(|i| i.time) as f32;
+    0.5 + 0.5 * (t * std::f32::consts::TAU / period).sin()
+}
+
+pub fn status_dot(c: &CameraState) -> (Color32, String) {
+    match &c.link {
+        LinkState::Online => {
+            if c.motion {
+                (theme::MOTION, "Motion right now".into())
+            } else {
+                let last =
+                    c.last_motion.map(|t| format!("Last motion {}", util::ago(t))).unwrap_or_else(|| "No motion yet".into());
+                (theme::LIVE, format!("Online · {last}"))
+            }
+        }
+        LinkState::NoEvents(e) => (theme::WARN, format!("Online, but no motion alerts: {e}")),
+        LinkState::Connecting => (theme::MUTED, "Connecting…".into()),
+        LinkState::Offline(e) => (theme::MOTION.gamma_multiply(0.6), format!("Offline: {e}")),
+        LinkState::AuthFailed(e) => (theme::WARN, format!("Login rejected: {e}")),
+    }
+}
+
+#[allow(dead_code)]
+pub fn since(t: SystemTime) -> Duration {
+    SystemTime::now().duration_since(t).unwrap_or_default()
 }
