@@ -361,4 +361,180 @@ impl TapestryApp {
     }
 
     // ----- per-frame ------------------------------------------------------------
+
+    fn poll(&mut self, ctx: &egui::Context) {
+        if let Some(e) = &self.engine {
+            self.cams = e.cameras();
+        }
+        let finished = std::mem::take(&mut *self.jobs.lock().unwrap());
+        for (msg, color) in finished {
+            self.toast(msg, color);
+        }
+        self.toasts.retain(|(t, _, _)| t.elapsed() < Duration::from_secs(6));
+
+        // Pause grid streams while minimised; motion + recording carry on.
+        let minimized = ctx.input(|i| i.viewport().minimized).unwrap_or(false);
+        if minimized != self.minimized {
+            self.minimized = minimized;
+            let focused = self.focus.as_ref().map(|f| f.cam);
+            for (i, t) in self.tiles.iter().enumerate() {
+                if let Some(s) = &t.stream {
+                    s.set_paused(minimized || Some(i) == focused);
+                }
+            }
+            if let Some(f) = &self.focus {
+                if let Some(s) = &f.view.stream {
+                    s.set_paused(minimized);
+                }
+            }
+        }
+
+        // Motion started somewhere?
+        let window_focused = ctx.input(|i| i.viewport().focused).unwrap_or(true);
+        let mut new_motion = Vec::new();
+        for (i, c) in self.cams.iter().enumerate() {
+            let was = self.prev_motion.get(i).copied().unwrap_or(false);
+            if c.motion && !was {
+                new_motion.push(c.name.clone());
+            }
+        }
+        self.prev_motion = self.cams.iter().map(|c| c.motion).collect();
+        if !new_motion.is_empty() && self.cfg.flash_taskbar && !window_focused {
+            ctx.send_viewport_cmd(egui::ViewportCommand::RequestUserAttention(egui::UserAttentionType::Informational));
+        }
+
+        // Window title doubles as an alert you can see from the taskbar.
+        let moving: Vec<&str> = self.cams.iter().filter(|c| c.motion).map(|c| c.name.as_str()).collect();
+        let title =
+            if moving.is_empty() { "Tapestry".to_string() } else { format!("● Motion: {} — Tapestry", moving.join(", ")) };
+        if title != self.title {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Title(title.clone()));
+            self.title = title;
+        }
+    }
+
+    fn upload(&mut self, ctx: &egui::Context) {
+        for (i, t) in self.tiles.iter_mut().enumerate() {
+            t.upload(ctx, &format!("tile-{i}"));
+        }
+        if let Some(f) = &mut self.focus {
+            f.view.upload(ctx, "focus");
+        }
+        if let Some(p) = &mut self.playback {
+            p.view.upload(ctx, "playback");
+            // Seeking while paused: show the first frame at the new spot, then hold.
+            let got_frame = p.view.stream.as_ref().map_or(false, |s| s.frames_this_run() > 0);
+            if p.paused_at.is_some() && p.view.seq > 0 && got_frame {
+                p.view.stream = None;
+            }
+        }
+    }
+
+    fn keys(&mut self, ctx: &egui::Context) {
+        if ctx.wants_keyboard_input() {
+            return;
+        }
+        let (esc, digits, c_key, s_key, r_key, p_key, f_key, space, left, right) = ctx.input(|i| {
+            let digits: Vec<usize> = [
+                egui::Key::Num1,
+                egui::Key::Num2,
+                egui::Key::Num3,
+                egui::Key::Num4,
+                egui::Key::Num5,
+                egui::Key::Num6,
+                egui::Key::Num7,
+                egui::Key::Num8,
+                egui::Key::Num9,
+            ]
+            .iter()
+            .enumerate()
+            .filter(|(_, k)| i.key_pressed(**k))
+            .map(|(n, _)| n)
+            .collect();
+            (
+                i.key_pressed(egui::Key::Escape) || i.key_pressed(egui::Key::Num0),
+                digits,
+                i.key_pressed(egui::Key::C),
+                i.key_pressed(egui::Key::S) && i.modifiers.ctrl,
+                i.key_pressed(egui::Key::R),
+                i.key_pressed(egui::Key::P),
+                i.key_pressed(egui::Key::F11) || (i.key_pressed(egui::Key::F) && !i.modifiers.any()),
+                i.key_pressed(egui::Key::Space),
+                i.key_pressed(egui::Key::ArrowLeft),
+                i.key_pressed(egui::Key::ArrowRight),
+            )
+        });
+
+        if esc {
+            let fullscreen = ctx.input(|i| i.viewport().fullscreen).unwrap_or(false);
+            if fullscreen {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(false));
+            } else {
+                self.close_focus();
+                self.close_playback();
+            }
+        }
+        if let Some(&d) = digits.first() {
+            self.open_focus(ctx, d);
+        }
+        if c_key {
+            self.show_clips = !self.show_clips;
+        }
+        if p_key {
+            self.toggle_pin(ctx);
+        }
+        if f_key {
+            let fs = ctx.input(|i| i.viewport().fullscreen).unwrap_or(false);
+            ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(!fs));
+        }
+        match self.center {
+            Center::Focus => {
+                let cam = self.focus.as_ref().map(|f| f.cam).unwrap_or(0);
+                if s_key {
+                    self.snapshot(cam);
+                }
+                if r_key {
+                    self.record_now(cam);
+                }
+            }
+            Center::Playback => {
+                if space {
+                    self.toggle_pause(ctx);
+                }
+                if left || right {
+                    if let Some(pos) = self.playback.as_ref().map(|p| p.position()) {
+                        let to = if left { pos.saturating_sub(Duration::from_secs(10)) } else { pos + Duration::from_secs(10) };
+                        self.seek(ctx, to, true);
+                    }
+                }
+            }
+            Center::Grid => {}
+        }
+    }
+
+    pub fn toggle_pause(&mut self, ctx: &egui::Context) {
+        let Some(pb) = self.playback.as_mut() else { return };
+        let ended = pb.view.stream.as_ref().map_or(false, |s| matches!(s.status(), tapestry_core::StreamStatus::Ended));
+        if ended {
+            self.seek(ctx, Duration::ZERO, false);
+        } else if let Some(at) = pb.paused_at {
+            self.seek(ctx, at, false);
+        } else {
+            pb.paused_at = Some(pb.position());
+            pb.view.stream = None;
+        }
+    }
+
+    pub fn toggle_pin(&mut self, ctx: &egui::Context) {
+        self.cfg.always_on_top = !self.cfg.always_on_top;
+        ctx.send_viewport_cmd(egui::ViewportCommand::WindowLevel(if self.cfg.always_on_top {
+            egui::WindowLevel::AlwaysOnTop
+        } else {
+            egui::WindowLevel::Normal
+        }));
+        self.save_config();
+        self.toast(if self.cfg.always_on_top { "Pinned on top" } else { "Unpinned" }, theme::MUTED);
+    }
+
+    // ----- chrome -----------------------------------------------------------------
 }
