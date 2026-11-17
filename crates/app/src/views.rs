@@ -568,4 +568,220 @@ impl TapestryApp {
     }
 
     // ----- playback -------------------------------------------------------------
+
+    pub fn playback_view(&mut self, ui: &mut egui::Ui) {
+        if self.playback.is_none() {
+            self.center = Center::Grid;
+            return;
+        }
+        let area = ui.available_rect_before_wrap();
+        ui.allocate_rect(area, Sense::hover());
+        let others = !self.cfg.cameras.is_empty();
+        let strip_w = if others { (area.width() * 0.18).clamp(160.0, 280.0) } else { 0.0 };
+        let left_w = area.width() - strip_w - if others { 8.0 } else { 0.0 };
+        let bar = Rect::from_min_size(area.min, vec2(left_w, 34.0));
+        let controls = Rect::from_min_max(pos2(area.left(), area.bottom() - 64.0), pos2(area.left() + left_w, area.bottom()));
+        let main = Rect::from_min_max(pos2(area.left(), bar.bottom() + 6.0), pos2(area.left() + left_w, controls.top() - 6.0));
+
+        self.playback_toolbar(ui, bar);
+        self.playback_video(ui, main);
+        self.playback_controls(ui, controls);
+        if others {
+            let strip = Rect::from_min_max(pos2(area.right() - strip_w, area.top()), area.max);
+            self.filmstrip(ui, strip, None);
+        }
+    }
+
+    fn playback_toolbar(&mut self, ui: &mut egui::Ui, bar: Rect) {
+        let Some(pb) = &self.playback else { return };
+        let clip = pb.clip.clone();
+        let cam_name =
+            pb.cam.and_then(|i| self.cfg.cameras.get(i)).map(|c| c.name.clone()).unwrap_or_else(|| clip.camera_slug.clone());
+        let when = util::clip_start(&clip).map(|t| t.format("%H:%M:%S").to_string()).unwrap_or_default();
+        let ctx = ui.ctx().clone();
+        ui.allocate_new_ui(egui::UiBuilder::new().max_rect(bar), |ui| {
+            ui.horizontal_centered(|ui| {
+                if ui.button("◀ Back to live").on_hover_text("Esc").clicked() {
+                    self.close_playback();
+                    return;
+                }
+                ui.label(RichText::new(format!("{cam_name}  ·  {} {when}", util::day_label(&clip.day))).size(16.0).strong());
+                ui.label(RichText::new(util::bytes(clip.bytes)).color(theme::MUTED).small());
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.button("📂 Show in folder").clicked() {
+                        util::show_in_folder(&clip.path);
+                    }
+                    if ui.button("↗ Open in player").clicked() {
+                        util::open_path(&clip.path);
+                    }
+                    let (prev, next) = self.neighbours(&clip);
+                    if ui.add_enabled(next.is_some(), egui::Button::new("Newer ⏭")).clicked() {
+                        if let Some(c) = next {
+                            self.open_clip(&ctx, c, Duration::ZERO);
+                        }
+                    }
+                    if ui.add_enabled(prev.is_some(), egui::Button::new("⏮ Older")).clicked() {
+                        if let Some(c) = prev {
+                            self.open_clip(&ctx, c, Duration::ZERO);
+                        }
+                    }
+                });
+            });
+        });
+    }
+
+    /// The clips just before/after this one from the same camera.
+    fn neighbours(
+        &mut self,
+        clip: &tapestry_core::clips::Clip,
+    ) -> (Option<tapestry_core::clips::Clip>, Option<tapestry_core::clips::Clip>) {
+        self.refresh_clips(false);
+        let same: Vec<_> = self.clips.clips.iter().filter(|c| c.camera_slug == clip.camera_slug).collect(); // newest first
+        let Some(k) = same.iter().position(|c| c.path == clip.path) else { return (None, None) };
+        let newer = if k > 0 { Some(same[k - 1].clone()) } else { None };
+        let older = same.get(k + 1).map(|c| (*c).clone());
+        (older, newer)
+    }
+
+    fn playback_video(&mut self, ui: &mut egui::Ui, area: Rect) {
+        let Some(pb) = &self.playback else { return };
+        let painter = ui.painter_at(area);
+        painter.rect_filled(area, 8.0, theme::TILE);
+        let video = util::fit_aspect(area, ASPECT);
+        if let Some(tex) = &pb.view.tex {
+            painter.image(tex.id(), video, FULL_UV, Color32::WHITE);
+        }
+        let status = pb.view.stream.as_ref().map(|s| s.status());
+        let paused = pb.paused_at.is_some();
+        let overlay = match status {
+            _ if paused => Some("❚❚  paused — Space to play".to_string()),
+            Some(StreamStatus::Connecting) if pb.view.tex.is_none() => Some("Loading…".into()),
+            Some(StreamStatus::Ended) => Some("Finished — Space to replay".into()),
+            Some(StreamStatus::Failed(e)) => Some(format!("Can't play this clip: {e}")),
+            _ => None,
+        };
+        if let Some(t) = overlay {
+            pill(&painter, video.center(), Align2::CENTER_CENTER, &t, theme::TEXT, Color32::from_black_alpha(170), 15.0);
+        }
+        let resp = ui.interact(video, Id::new("pb-video"), Sense::click());
+        if resp.clicked() {
+            let ctx = ui.ctx().clone();
+            self.toggle_pause(&ctx);
+        }
+    }
+
+    fn playback_controls(&mut self, ui: &mut egui::Ui, rect: Rect) {
+        let ctx = ui.ctx().clone();
+        let Some(pb) = &self.playback else { return };
+        let pos = pb.position();
+        let len = pb.length;
+        let speed = pb.speed;
+        let paused =
+            pb.paused_at.is_some() || pb.view.stream.as_ref().map_or(true, |s| matches!(s.status(), StreamStatus::Ended));
+        let clip = pb.clip.clone();
+        let clip_start_unix = util::clip_start(&clip).map(|t| t.timestamp());
+        let spans: Vec<(f32, f32)> = match (clip_start_unix, len) {
+            (Some(s0), Some(l)) => self
+                .clips
+                .motion
+                .iter()
+                .filter(|(slug, _)| *slug == clip.camera_slug)
+                .flat_map(|(_, v)| v.iter())
+                .filter_map(|m| {
+                    let a = (m.start - s0) as f32;
+                    let b = (m.end.max(m.start + 1) - s0) as f32;
+                    let l = l.as_secs_f32();
+                    (b > 0.0 && a < l).then(|| (a.max(0.0) / l, (b / l).min(1.0)))
+                })
+                .collect(),
+            _ => Vec::new(),
+        };
+
+        ui.allocate_new_ui(egui::UiBuilder::new().max_rect(rect), |ui| {
+            egui::Frame::none().fill(theme::PANEL).rounding(8.0).inner_margin(egui::Margin::symmetric(12.0, 8.0)).show(
+                ui,
+                |ui| {
+                    ui.set_min_width(rect.width() - 24.0);
+                    // Scrub bar.
+                    let (bar, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 16.0), Sense::click_and_drag());
+                    let p = ui.painter();
+                    let track = Rect::from_center_size(bar.center(), vec2(bar.width(), 6.0));
+                    p.rect_filled(track, 3.0, theme::RAISED);
+                    for (a, b) in &spans {
+                        let r = Rect::from_min_max(
+                            pos2(track.left() + a * track.width(), track.top()),
+                            pos2(track.left() + b * track.width(), track.bottom()),
+                        );
+                        p.rect_filled(r, 2.0, theme::MOTION.gamma_multiply(0.7));
+                    }
+                    if let Some(l) = len {
+                        let frac = (pos.as_secs_f32() / l.as_secs_f32().max(0.1)).clamp(0.0, 1.0);
+                        let done = Rect::from_min_max(track.min, pos2(track.left() + frac * track.width(), track.bottom()));
+                        p.rect_filled(done, 3.0, theme::AMBER.gamma_multiply(0.8));
+                        p.circle_filled(pos2(done.right(), track.center().y), 6.0, theme::AMBER);
+                        if let Some(h) = resp.hover_pos() {
+                            let hf = ((h.x - track.left()) / track.width()).clamp(0.0, 1.0);
+                            let t = Duration::from_secs_f32(hf * l.as_secs_f32());
+                            p.line_segment(
+                                [pos2(h.x, track.top() - 4.0), pos2(h.x, track.bottom() + 4.0)],
+                                Stroke::new(1.0_f32, theme::TEXT),
+                            );
+                            let wall = clip_start_unix
+                                .and_then(|s| util::unix_to_local(s + t.as_secs() as i64))
+                                .map(|d| d.format("  %H:%M:%S").to_string())
+                                .unwrap_or_default();
+                            resp.clone().on_hover_text_at_pointer(format!("{}{wall}", util::dur(t)));
+                        }
+                        if resp.clicked() || resp.drag_stopped() {
+                            if let Some(h) = resp.interact_pointer_pos() {
+                                let hf = ((h.x - track.left()) / track.width()).clamp(0.0, 1.0);
+                                let at = Duration::from_secs_f32(hf * l.as_secs_f32());
+                                self.seek(&ctx, at, true);
+                            }
+                        }
+                    }
+
+                    ui.horizontal(|ui| {
+                        if ui.button(if paused { "▶" } else { "❚❚" }).on_hover_text("Space").clicked() {
+                            self.toggle_pause(&ctx);
+                        }
+                        if ui.button("⟲ 10s").on_hover_text("←").clicked() {
+                            self.seek(&ctx, pos.saturating_sub(Duration::from_secs(10)), true);
+                        }
+                        if ui.button("10s ⟳").on_hover_text("→").clicked() {
+                            self.seek(&ctx, pos + Duration::from_secs(10), true);
+                        }
+                        let wall = clip_start_unix
+                            .and_then(|s| util::unix_to_local(s + pos.as_secs() as i64))
+                            .map(|d| d.format("%H:%M:%S").to_string());
+                        ui.label(
+                            RichText::new(format!("{} / {}", util::dur(pos), len.map(util::dur).unwrap_or_else(|| "–".into())))
+                                .monospace(),
+                        );
+                        if let Some(w) = wall {
+                            ui.label(RichText::new(format!("({w})")).color(theme::MUTED).monospace());
+                        }
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            for s in [8.0f32, 4.0, 2.0, 1.0] {
+                                if ui.selectable_label((speed - s).abs() < 0.01, format!("{s}×")).clicked()
+                                    && (speed - s).abs() > 0.01
+                                {
+                                    if let Some(pb) = self.playback.as_mut() {
+                                        pb.speed = s;
+                                    }
+                                    self.seek(&ctx, pos, true);
+                                }
+                            }
+                            if !spans.is_empty() {
+                                ui.label(RichText::new("▮ motion").color(theme::MOTION).small());
+                            }
+                        });
+                    });
+                },
+            );
+        });
+        if !paused {
+            ctx.request_repaint_after(Duration::from_millis(200));
+        }
+    }
 }
