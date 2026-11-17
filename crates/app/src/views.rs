@@ -287,4 +287,285 @@ impl TapestryApp {
     }
 
     // ----- shared filmstrip ---------------------------------------------------
+
+    /// A column of small live tiles; click to focus that camera.
+    fn filmstrip(&mut self, ui: &mut egui::Ui, rect: Rect, skip: Option<usize>) {
+        let cams: Vec<usize> = (0..self.cfg.cameras.len()).filter(|i| Some(*i) != skip).collect();
+        if cams.is_empty() {
+            return;
+        }
+        let gap = 8.0;
+        let h = ((rect.height() - gap * (cams.len() as f32 - 1.0)) / cams.len() as f32).min(rect.width() / ASPECT + 4.0);
+        for (k, i) in cams.into_iter().enumerate() {
+            let r = Rect::from_min_size(rect.min + vec2(0.0, k as f32 * (h + gap)), vec2(rect.width(), h));
+            let resp = self.tile(ui, i, r, true);
+            if resp.clicked() {
+                self.open_focus(ui.ctx(), i);
+            }
+            self.tile_menu(&resp, i);
+        }
+    }
+
+    // ----- focus ----------------------------------------------------------------
+
+    pub fn focus_view(&mut self, ui: &mut egui::Ui) {
+        let Some(cam) = self.focus.as_ref().map(|f| f.cam) else {
+            self.center = Center::Grid;
+            return;
+        };
+        let area = ui.available_rect_before_wrap();
+        ui.allocate_rect(area, Sense::hover());
+        let others = self.cfg.cameras.len() > 1;
+        let strip_w = if others { (area.width() * 0.2).clamp(170.0, 300.0) } else { 0.0 };
+        let bar = Rect::from_min_size(area.min, vec2(area.width() - strip_w - if others { 8.0 } else { 0.0 }, 34.0));
+        let main = Rect::from_min_max(pos2(area.left(), bar.bottom() + 6.0), pos2(bar.right(), area.bottom()));
+
+        self.focus_toolbar(ui, bar, cam);
+        self.focus_video(ui, main, cam);
+        if others {
+            let strip = Rect::from_min_max(pos2(area.right() - strip_w, area.top()), area.max);
+            self.filmstrip(ui, strip, Some(cam));
+        }
+    }
+
+    fn focus_toolbar(&mut self, ui: &mut egui::Ui, bar: Rect, cam: usize) {
+        let c = self.cams.get(cam).cloned();
+        ui.allocate_new_ui(egui::UiBuilder::new().max_rect(bar), |ui| {
+            ui.horizontal_centered(|ui| {
+                if ui.button("◀ All cameras").on_hover_text("Esc").clicked() {
+                    self.close_focus();
+                    return;
+                }
+                let name = self.cfg.cameras.get(cam).map(|c| c.name.clone()).unwrap_or_default();
+                ui.label(RichText::new(name).size(16.0).strong());
+                if let Some(c) = &c {
+                    let (dot, tip) = status_dot(c);
+                    ui.label(RichText::new("●").color(dot)).on_hover_text(tip);
+                    if let Some(info) = &c.info {
+                        ui.label(RichText::new(format!("{} · fw {}", info.model, info.firmware)).color(theme::MUTED).small());
+                    }
+                    if let Some((t, e)) = &c.ptz_error {
+                        if SystemTime::now().duration_since(*t).unwrap_or_default() < Duration::from_secs(8) {
+                            ui.label(RichText::new(format!("pan/tilt: {e}")).color(theme::WARN).small());
+                        }
+                    }
+                }
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.button("🎞 Clips").clicked() {
+                        self.clips_cam = self.cfg.cameras.get(cam).map(|c| c.slug());
+                        self.show_clips = true;
+                    }
+                    let manual = c.as_ref().and_then(|c| c.manual_until);
+                    let label = match manual {
+                        Some(until) => {
+                            let left = until.duration_since(SystemTime::now()).unwrap_or_default();
+                            format!("⏹ Stop ({})", util::dur(left))
+                        }
+                        None => "⏺ Record 5 min".into(),
+                    };
+                    if ui.button(label).on_hover_text("R — record now regardless of motion").clicked() {
+                        self.record_now(cam);
+                    }
+                    if ui.button("📷 Snapshot").on_hover_text("Ctrl+S — full-quality still").clicked() {
+                        self.snapshot(cam);
+                    }
+                    if let Some(c) = &c {
+                        if c.has_ptz && !c.presets.is_empty() {
+                            ui.menu_button("📍 Presets", |ui| {
+                                for p in &c.presets {
+                                    if ui.button(&p.name).clicked() {
+                                        if let Some(e) = &self.engine {
+                                            e.ptz(cam, PtzCommand::GotoPreset(p.token.clone()));
+                                        }
+                                        ui.close_menu();
+                                    }
+                                }
+                            });
+                        }
+                    }
+                });
+            });
+        });
+    }
+
+    fn focus_video(&mut self, ui: &mut egui::Ui, area: Rect, cam: usize) {
+        let has_ptz =
+            self.cams.get(cam).map_or(false, |c| c.has_ptz && matches!(c.link, LinkState::Online | LinkState::NoEvents(_)));
+        let click_to_aim = self.cfg.click_to_aim;
+        let gain = self.cfg.aim_gain;
+        let problem = self.stream_problem(cam, true);
+        let motion = self.cams.get(cam).map_or(false, |c| c.motion);
+
+        let video = util::fit_aspect(area, ASPECT);
+        let resp = ui.interact(video, Id::new("focus-video"), Sense::click_and_drag());
+        let painter = ui.painter_at(area);
+        painter.rect_filled(area, 8.0, theme::TILE);
+
+        let Some(f) = self.focus.as_mut() else { return };
+
+        // Digital zoom: scroll to zoom around the cursor, drag to pan.
+        if resp.hovered() {
+            let scroll = ui.input(|i| i.smooth_scroll_delta.y);
+            if scroll != 0.0 {
+                if let Some(p) = resp.hover_pos() {
+                    let old = f.zoom;
+                    let new = (old * (1.0 + scroll * 0.0025)).clamp(1.0, 6.0);
+                    let fx = (p.x - video.left()) / video.width();
+                    let fy = (p.y - video.top()) / video.height();
+                    let u = f.center.x - 0.5 / old + fx / old;
+                    let v = f.center.y - 0.5 / old + fy / old;
+                    f.center = pos2(u - fx / new + 0.5 / new, v - fy / new + 0.5 / new);
+                    f.zoom = new;
+                }
+            }
+        }
+        if resp.dragged() && f.zoom > 1.0 {
+            let d = resp.drag_delta();
+            f.center.x -= d.x / video.width() / f.zoom;
+            f.center.y -= d.y / video.height() / f.zoom;
+        }
+        let half = 0.5 / f.zoom;
+        f.center.x = f.center.x.clamp(half, 1.0 - half);
+        f.center.y = f.center.y.clamp(half, 1.0 - half);
+        let uv = Rect::from_center_size(f.center, vec2(1.0 / f.zoom, 1.0 / f.zoom));
+
+        if let Some(tex) = &f.view.tex {
+            painter.image(tex.id(), video, uv, Color32::WHITE);
+        }
+        if let Some((msg, _)) = &problem {
+            if f.view.tex.is_some() {
+                painter.rect_filled(video, 0.0, Color32::from_black_alpha(150));
+            }
+            painter.text(video.center(), Align2::CENTER_CENTER, msg, FontId::proportional(16.0), theme::MUTED);
+        }
+        if motion {
+            let a = 0.45 + 0.55 * pulse(ui.ctx(), 0.9);
+            painter.rect_stroke(video.shrink(1.5), 6.0, Stroke::new(3.0_f32, theme::MOTION.gamma_multiply(a)));
+            pill(&painter, video.right_top() + vec2(-12.0, 12.0), Align2::RIGHT_TOP, "MOTION", Color32::BLACK, theme::WARN, 14.0);
+        }
+
+        let zoomed = f.zoom > 1.01;
+        if zoomed {
+            let r = pill(
+                &painter,
+                video.left_top() + vec2(12.0, 12.0),
+                Align2::LEFT_TOP,
+                &format!("{:.1}× zoom — click to reset", f.zoom),
+                theme::TEXT,
+                Color32::from_black_alpha(170),
+                12.0,
+            );
+            if ui.interact(r, Id::new("zoom-reset"), Sense::click()).clicked() {
+                f.zoom = 1.0;
+                f.center = pos2(0.5, 0.5);
+            }
+        }
+
+        // Click-to-aim: nudge the camera toward where you clicked.
+        let mut nudge = None;
+        if resp.clicked() && !zoomed && has_ptz && click_to_aim {
+            if let Some(p) = resp.interact_pointer_pos() {
+                let dx = (p.x - video.center().x) / (video.width() / 2.0);
+                let dy = (p.y - video.center().y) / (video.height() / 2.0);
+                nudge = Some((dx * gain, -dy * gain));
+                f.aim_flash = Some((p, std::time::Instant::now()));
+            }
+        }
+        if let Some((p, t)) = f.aim_flash {
+            let k = t.elapsed().as_secs_f32() / 0.6;
+            if k < 1.0 {
+                painter.circle_stroke(p, 6.0 + 28.0 * k, Stroke::new(2.0_f32, theme::AMBER.gamma_multiply(1.0 - k)));
+                painter.line_segment(
+                    [p - vec2(8.0, 0.0), p + vec2(8.0, 0.0)],
+                    Stroke::new(1.5_f32, theme::AMBER.gamma_multiply(1.0 - k)),
+                );
+                painter.line_segment(
+                    [p - vec2(0.0, 8.0), p + vec2(0.0, 8.0)],
+                    Stroke::new(1.5_f32, theme::AMBER.gamma_multiply(1.0 - k)),
+                );
+                ui.ctx().request_repaint();
+            } else {
+                f.aim_flash = None;
+            }
+        }
+
+        // D-pad (press and hold).
+        let mut dpad = None;
+        if has_ptz {
+            let c = video.right_bottom() - vec2(78.0, 78.0);
+            let hover = resp.hovered() || ui.rect_contains_pointer(Rect::from_center_size(c, vec2(140.0, 140.0)));
+            painter.circle_filled(c, 60.0, Color32::from_black_alpha(if hover { 150 } else { 90 }));
+            let fast = !ui.input(|i| i.modifiers.shift);
+            let speed = if fast { 0.6 } else { 0.25 };
+            for (k, (off, glyph, dir)) in [
+                (vec2(0.0, -34.0), "▲", (0.0, 1.0)),
+                (vec2(0.0, 34.0), "▼", (0.0, -1.0)),
+                (vec2(-34.0, 0.0), "◀", (-1.0, 0.0)),
+                (vec2(34.0, 0.0), "▶", (1.0, 0.0)),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                let r = Rect::from_center_size(c + off, vec2(34.0, 34.0));
+                let b = ui.interact(r, Id::new(("dpad", k)), Sense::click_and_drag());
+                let down = b.is_pointer_button_down_on();
+                if down {
+                    dpad = Some((dir.0 * speed, dir.1 * speed));
+                }
+                let col = if down {
+                    theme::AMBER
+                } else if b.hovered() {
+                    theme::TEXT
+                } else {
+                    theme::TEXT.gamma_multiply(if hover { 0.85 } else { 0.5 })
+                };
+                painter.circle_filled(r.center(), 16.0, if down { Color32::from_black_alpha(200) } else { Color32::TRANSPARENT });
+                painter.text(r.center(), Align2::CENTER_CENTER, glyph, FontId::proportional(18.0), col);
+            }
+            painter.text(c, Align2::CENTER_CENTER, "⊕", FontId::proportional(14.0), theme::MUTED);
+            if hover {
+                painter.text(
+                    c + vec2(0.0, 74.0),
+                    Align2::CENTER_TOP,
+                    if click_to_aim {
+                        "hold to steer · arrows/WASD · click video to aim"
+                    } else {
+                        "hold to steer · arrows/WASD"
+                    },
+                    FontId::proportional(11.0),
+                    theme::MUTED,
+                );
+            }
+        }
+
+        // Keyboard steering.
+        let keys = if has_ptz && !ui.ctx().wants_keyboard_input() {
+            ui.input(|i| {
+                let k = |a: egui::Key, b: egui::Key| i.key_down(a) || i.key_down(b);
+                let x = (k(egui::Key::ArrowRight, egui::Key::D) as i32 - k(egui::Key::ArrowLeft, egui::Key::A) as i32) as f32;
+                let y = (k(egui::Key::ArrowUp, egui::Key::W) as i32 - k(egui::Key::ArrowDown, egui::Key::S) as i32) as f32;
+                let speed = if i.modifiers.shift { 0.25 } else { 0.6 };
+                // Ctrl+S is snapshot, not "tilt down".
+                if i.modifiers.ctrl || (x == 0.0 && y == 0.0) {
+                    None
+                } else {
+                    Some((x * speed, y * speed))
+                }
+            })
+        } else {
+            None
+        };
+
+        let window_focused = ui.input(|i| i.viewport().focused).unwrap_or(true);
+        let want = if window_focused { dpad.or(keys) } else { None };
+        self.ptz(cam, want);
+        if want.is_some() {
+            ui.ctx().request_repaint();
+        }
+        if let (Some((pan, tilt)), Some(e)) = (nudge, &self.engine) {
+            e.ptz(cam, PtzCommand::Nudge { pan, tilt });
+        }
+    }
+
+    // ----- playback -------------------------------------------------------------
 }
