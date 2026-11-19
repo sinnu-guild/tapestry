@@ -254,3 +254,111 @@ fn cameras_tab(ui: &mut egui::Ui, d: &mut SettingsDraft, ff: Option<PathBuf>) {
     }
     ui.ctx().request_repaint_after(std::time::Duration::from_millis(250));
 }
+
+fn recording_tab(ui: &mut egui::Ui, d: &mut SettingsDraft) {
+    let c = &mut d.cfg;
+    ui.label(RichText::new("When to record").strong());
+    for (mode, title, blurb) in [
+        (
+            RecordMode::Motion,
+            "On motion",
+            "Save a clip whenever a camera reports motion, plus a little after it stops. Light on disk.",
+        ),
+        (
+            RecordMode::Continuous,
+            "All the time",
+            "Record everything in back-to-back files. Roughly 10–30 GB a day for three cameras.",
+        ),
+        (RecordMode::Off, "Off", "Live view only. You can still record manually with R."),
+    ] {
+        ui.radio_value(&mut c.record_mode, mode, RichText::new(title).strong());
+        ui.label(RichText::new(blurb).color(theme::MUTED).small());
+    }
+    ui.add_space(10.0);
+    egui::Grid::new("rec-grid").num_columns(2).spacing([12.0, 10.0]).show(ui, |ui| {
+        ui.label("Keep recording after motion");
+        ui.add(egui::Slider::new(&mut c.post_roll_secs, 5..=120).suffix(" s"));
+        ui.end_row();
+        ui.label("Split files every");
+        let mut mins = (c.max_clip_secs / 60).max(1);
+        ui.add(egui::Slider::new(&mut mins, 1..=30).suffix(" min"));
+        c.max_clip_secs = mins * 60;
+        ui.end_row();
+        ui.label("Delete clips older than");
+        ui.add(egui::Slider::new(&mut c.keep_days, 0..=90).suffix(" days"));
+        ui.end_row();
+        ui.label("");
+        ui.label(
+            RichText::new(if c.keep_days == 0 { "0 = keep forever" } else { "Snapshots are never deleted." })
+                .color(theme::MUTED)
+                .small(),
+        );
+        ui.end_row();
+        ui.label("Max space for clips");
+        ui.add(egui::Slider::new(&mut c.max_storage_gb, 0..=2000).logarithmic(true).suffix(" GB"));
+        ui.end_row();
+        ui.label("");
+        ui.label(RichText::new("Oldest clips go first when full. 0 = no limit.").color(theme::MUTED).small());
+        ui.end_row();
+    });
+    ui.add_space(10.0);
+    ui.label(RichText::new("Recordings folder").strong());
+    let mut dir = c.recordings_dir.to_string_lossy().into_owned();
+    ui.horizontal(|ui| {
+        if ui.add(egui::TextEdit::singleline(&mut dir).desired_width(380.0)).changed() {
+            c.recordings_dir = PathBuf::from(dir.trim());
+        }
+        if ui.small_button("Open").clicked() {
+            let _ = std::fs::create_dir_all(&c.recordings_dir);
+            util::open_path(&c.recordings_dir);
+        }
+        if ui.small_button("Default").clicked() {
+            c.recordings_dir = tapestry_core::config::default_recordings_dir();
+        }
+    });
+    ui.label(
+        RichText::new("Tapestry only ever deletes files it created (named like 14-05-33.mp4 inside date folders).")
+            .color(theme::MUTED)
+            .small(),
+    );
+}
+
+fn general_tab(ui: &mut egui::Ui, d: &mut SettingsDraft) {
+    ui.label(RichText::new("FFmpeg").strong());
+    ui.horizontal(|ui| {
+        ui.add(
+            egui::TextEdit::singleline(&mut d.cfg.ffmpeg).hint_text("automatic (PATH or next to Tapestry)").desired_width(380.0),
+        );
+    });
+    if d.ffmpeg_check.0 != d.cfg.ffmpeg {
+        d.ffmpeg_check = (d.cfg.ffmpeg.clone(), ffmpeg::locate(&d.cfg.ffmpeg));
+    }
+    match &d.ffmpeg_check.1 {
+        Some(p) => ui.label(RichText::new(format!("✓ using {}", p.display())).color(theme::LIVE).small()),
+        None => ui.label(RichText::new("✗ not found — install with: winget install Gyan.FFmpeg").color(theme::MOTION).small()),
+    };
+    ui.add_space(10.0);
+
+    let c = &mut d.cfg;
+    ui.label(RichText::new("Wall").strong());
+    egui::Grid::new("gen-grid").num_columns(2).spacing([12.0, 10.0]).show(ui, |ui| {
+        ui.label("Grid frame rate");
+        ui.add(egui::Slider::new(&mut c.grid_fps, 2..=25).suffix(" fps"));
+        ui.end_row();
+        ui.label("");
+        ui.label(RichText::new("Lower = less CPU. The camera you open always plays at full rate.").color(theme::MUTED).small());
+        ui.end_row();
+    });
+    ui.checkbox(&mut c.flash_taskbar, "Flash the taskbar button when there's motion and Tapestry isn't in front");
+    ui.checkbox(&mut c.always_on_top, "Keep Tapestry on top of other windows");
+    ui.add_space(10.0);
+    ui.label(RichText::new("Pan / tilt").strong());
+    ui.checkbox(&mut c.click_to_aim, "Click on the video to aim the camera there");
+    ui.add_enabled_ui(c.click_to_aim, |ui| {
+        ui.horizontal(|ui| {
+            ui.label("Aim strength");
+            ui.add(egui::Slider::new(&mut c.aim_gain, 0.05..=1.0));
+        });
+        ui.label(RichText::new("If a click overshoots, lower this; if it falls short, raise it.").color(theme::MUTED).small());
+    });
+}
