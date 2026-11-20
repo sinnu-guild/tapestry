@@ -107,3 +107,33 @@ camera-only logins, not your TP-Link account, so the risk is small. Still, don't
 - Motion alerts here come from the camera's basic motion detector. Person and vehicle detection
   isn't exposed to PC apps, so expect the occasional tree or cat.
 - Tapestry only works on your home network. That's what it's for: watching from your desk.
+
+## Troubleshooting
+
+**Check a camera from the command line.** This prints the model, streams, pan/tilt support
+and presets, and listens for motion for 20 seconds:
+
+```
+cargo run --release -p tapestry-core --bin tapestry-probe -- 192.168.1.50 myuser mypass --wiggle
+```
+
+`--wiggle` turns the camera briefly right then left to prove pan/tilt works.
+
+| Symptom | Likely cause |
+|---|---|
+| "Wrong camera username/password" | Use the Camera Account, not your TP-Link login |
+| "Camera not reachable" | Wrong IP, the camera changed IP, or the PC is on a guest/isolated Wi-Fi |
+| "Camera is busy" | Too many viewers at once. Close the camera in the phone app and try again |
+| Video works but no motion alerts | Check that motion detection is on in the Tapo app for that camera |
+| Click-to-aim overshoots | Settings → General → lower "Aim strength" |
+| Pan/tilt goes the wrong way | Settings → camera → Advanced → "mounted upside down" |
+
+## Project layout
+
+```
+crates/core   tapestry-core: ONVIF client, FFmpeg streams, recorder, clips, engine.
+              No dependencies beyond Rust's standard library.
+              `cargo test -p tapestry-core` runs 44 tests, including a fake Tapo camera.
+crates/app    tapestry: the window (egui/eframe).
+docs/         design notes.
+```
