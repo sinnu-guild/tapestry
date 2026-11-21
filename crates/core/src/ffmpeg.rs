@@ -87,6 +87,10 @@ pub fn rtsp_input_args(url: &str, low_latency: bool) -> Vec<String> {
     let mut a: Vec<String> = vec!["-hide_banner".into(), "-nostdin".into(), "-loglevel".into(), "error".into()];
     if low_latency {
         a.extend(["-fflags", "nobuffer", "-flags", "low_delay"].map(String::from));
+        // Tapo cameras' RTP timestamps jump ~400 ms forward then back about once
+        // a second, which makes the fps filter emit bursts of duplicates and then
+        // drop real frames. Timestamp frames by arrival instead.
+        a.extend(["-use_wallclock_as_timestamps", "1"].map(String::from));
     }
     a.extend(["-rtsp_transport", "tcp", "-timeout", "8000000"].map(String::from));
     a.push("-i".into());
@@ -275,6 +279,17 @@ mod tests {
         assert_eq!(parse_duration_line(s), Some(Duration::from_millis(62_500)));
         assert_eq!(parse_duration_line("  Duration: N/A, bitrate: N/A"), None);
         assert_eq!(parse_hms("1:00:00"), Some(Duration::from_secs(3600)));
+    }
+
+    #[test]
+    fn live_input_uses_arrival_timestamps() {
+        let pos = |a: &[String], s: &str| a.iter().position(|x| x == s);
+        let live = rtsp_input_args("rtsp://cam/stream2", true);
+        let flag = pos(&live, "-use_wallclock_as_timestamps").expect("live args set wallclock timestamps");
+        assert_eq!(live[flag + 1], "1");
+        assert!(flag < pos(&live, "-i").unwrap(), "must be an input option");
+        let snap = rtsp_input_args("rtsp://cam/stream1", false);
+        assert!(pos(&snap, "-use_wallclock_as_timestamps").is_none());
     }
 
     #[test]
