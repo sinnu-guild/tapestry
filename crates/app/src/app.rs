@@ -9,14 +9,15 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
 use tapestry_core::clips::{Clip, MotionSpan};
 use tapestry_core::{
-    ffmpeg, CameraState, Config, Engine, EngineOptions, Frame, LinkState, PtzCommand, Quality, StreamSpec, VideoStream,
+    ffmpeg, CameraState, Config, Engine, EngineOptions, Frame, LinkState, PtzCommand, Quality, StreamSpec, StreamStatus,
+    VideoStream,
 };
 
 /// Grid tiles use the camera's low-quality stream at this size.
 pub const GRID_SIZE: [u32; 2] = [640, 360];
 /// The focused camera uses the high-quality stream at this size.
 pub const FOCUS_SIZE: [u32; 2] = [1920, 1080];
-pub const FOCUS_FPS: u32 = 15;
+pub const FOCUS_FPS: u32 = 25;
 pub const PLAYBACK_SIZE: [u32; 2] = [1600, 900];
 pub const PLAYBACK_FPS: u32 = 15;
 
@@ -48,7 +49,22 @@ impl LiveView {
 }
 
 fn to_image(f: &Frame) -> egui::ColorImage {
-    egui::ColorImage::from_rgba_unmultiplied([f.width as usize, f.height as usize], &f.rgba)
+    // FFmpeg's RGBA output is always opaque, so premultiplied == unmultiplied
+    // and a straight copy is enough (much cheaper than per-pixel conversion
+    // at 2880x1620).
+    egui::ColorImage { size: [f.width as usize, f.height as usize], pixels: bytemuck::cast_slice(&f.rgba).to_vec() }
+}
+
+/// Size to decode the focused camera at: its native main-stream size when
+/// ONVIF reported one (so digital zoom has real detail), else 1080p.
+fn focus_size(main: Option<(u32, u32)>) -> (u32, u32) {
+    match main {
+        Some((w, h)) if w >= 320 && h >= 180 => {
+            let (w, h) = (w.min(3840), h.min(2160));
+            (w & !1, h & !1)
+        }
+        _ => (FOCUS_SIZE[0], FOCUS_SIZE[1]),
+    }
 }
 
 pub struct Focus {
@@ -59,6 +75,9 @@ pub struct Focus {
     pub center: egui::Pos2,
     /// Last click-to-aim point, for a little ripple.
     pub aim_flash: Option<(egui::Pos2, Instant)>,
+    /// The camera's grid stream keeps running (and is shown) until the
+    /// full-quality stream delivers its first frame; then it's paused.
+    pub grid_released: bool,
 }
 
 pub struct Playback {
@@ -218,18 +237,24 @@ impl TapestryApp {
         }
         self.close_focus();
         self.playback = None;
+        let (w, h) = focus_size(self.cams.get(cam).and_then(|c| c.main_size));
         let stream = self.ffmpeg.clone().map(|ff| {
             VideoStream::start(
                 ff,
-                StreamSpec::rtsp(&self.cfg.cameras[cam].rtsp_url(Quality::Main), FOCUS_SIZE[0], FOCUS_SIZE[1], FOCUS_FPS),
+                StreamSpec::rtsp(&self.cfg.cameras[cam].rtsp_url(Quality::Main), w, h, FOCUS_FPS),
                 Some(waker(ctx)),
             )
         });
-        // Free the camera's grid stream while focused (cameras limit viewers).
-        if let Some(s) = self.tiles.get(cam).and_then(|t| t.stream.as_ref()) {
-            s.set_paused(true);
-        }
-        self.focus = Some(Focus { cam, view: LiveView::new(stream), zoom: 1.0, center: egui::pos2(0.5, 0.5), aim_flash: None });
+        // The grid stream stays live as a stand-in until the full-quality
+        // picture arrives; `upload` pauses it then (cameras limit viewers).
+        self.focus = Some(Focus {
+            cam,
+            view: LiveView::new(stream),
+            zoom: 1.0,
+            center: egui::pos2(0.5, 0.5),
+            aim_flash: None,
+            grid_released: false,
+        });
         self.center = Center::Focus;
     }
 
@@ -376,7 +401,7 @@ impl TapestryApp {
         let minimized = ctx.input(|i| i.viewport().minimized).unwrap_or(false);
         if minimized != self.minimized {
             self.minimized = minimized;
-            let focused = self.focus.as_ref().map(|f| f.cam);
+            let focused = self.focus.as_ref().filter(|f| f.grid_released).map(|f| f.cam);
             for (i, t) in self.tiles.iter().enumerate() {
                 if let Some(s) = &t.stream {
                     s.set_paused(minimized || Some(i) == focused);
@@ -419,6 +444,19 @@ impl TapestryApp {
         }
         if let Some(f) = &mut self.focus {
             f.view.upload(ctx, "focus");
+            if !f.grid_released {
+                // Release the stand-in grid stream once the full-quality picture
+                // is up, or as soon as the camera refuses/drops the extra viewer.
+                let status = f.view.stream.as_ref().map(|s| s.status());
+                let ready = f.view.seq > 0
+                    || matches!(status, None | Some(StreamStatus::Retrying { .. }) | Some(StreamStatus::Failed(_)));
+                if ready {
+                    f.grid_released = true;
+                    if let Some(s) = self.tiles.get(f.cam).and_then(|t| t.stream.as_ref()) {
+                        s.set_paused(true);
+                    }
+                }
+            }
         }
         if let Some(p) = &mut self.playback {
             p.view.upload(ctx, "playback");
@@ -808,4 +846,18 @@ pub fn status_dot(c: &CameraState) -> (Color32, String) {
 #[allow(dead_code)]
 pub fn since(t: SystemTime) -> Duration {
     SystemTime::now().duration_since(t).unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::focus_size;
+
+    #[test]
+    fn focus_uses_native_size_when_known() {
+        assert_eq!(focus_size(Some((2880, 1620))), (2880, 1620));
+        assert_eq!(focus_size(Some((2561, 1441))), (2560, 1440), "rounded to even");
+        assert_eq!(focus_size(Some((7680, 4320))), (3840, 2160), "capped at 4K");
+        assert_eq!(focus_size(None), (1920, 1080));
+        assert_eq!(focus_size(Some((0, 0))), (1920, 1080));
+    }
 }
