@@ -153,6 +153,8 @@ pub struct OnvifClient {
     pub events_url: Option<String>,
     /// Main (highest quality) profile, used for PTZ.
     pub profile_token: Option<String>,
+    /// That profile's picture size, if the camera reported one.
+    pub main_size: Option<(u32, u32)>,
 }
 
 impl OnvifClient {
@@ -169,6 +171,7 @@ impl OnvifClient {
             ptz_url: None,
             events_url: None,
             profile_token: None,
+            main_size: None,
         }
     }
 
@@ -180,6 +183,7 @@ impl OnvifClient {
         self.discover_services()?;
         let profiles = self.profiles()?;
         self.profile_token = profiles.first().map(|p| p.token.clone());
+        self.main_size = profiles.first().filter(|p| p.width > 0 && p.height > 0).map(|p| (p.width, p.height));
         Ok(info)
     }
 

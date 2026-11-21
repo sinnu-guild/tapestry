@@ -181,7 +181,7 @@ impl Default for Config {
             max_storage_gb: 100,
             flash_taskbar: true,
             always_on_top: false,
-            grid_fps: 12,
+            grid_fps: 25,
             click_to_aim: true,
             aim_gain: 0.35,
             cameras: Vec::new(),

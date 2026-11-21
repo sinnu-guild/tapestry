@@ -75,7 +75,7 @@ impl StreamSpec {
         let mut a = self.input_args.clone();
         a.extend(["-an", "-sn", "-dn", "-vf"].map(String::from));
         a.push(format!(
-            "fps={fps},scale={w}:{h}:force_original_aspect_ratio=decrease:flags=bilinear,pad={w}:{h}:(ow-iw)/2:(oh-ih)/2",
+            "fps={fps},scale={w}:{h}:force_original_aspect_ratio=decrease:flags=area,pad={w}:{h}:(ow-iw)/2:(oh-ih)/2",
             fps = self.fps.max(1)
         ));
         // The fps filter already sets the rate; don't let the output stage

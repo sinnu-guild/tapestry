@@ -336,7 +336,7 @@ fn link_reports_motion_and_falls_back_to_relative_ptz() {
     let evs = events.lock().unwrap().clone();
     assert!(matches!(
         evs.iter().find(|e| matches!(e, LinkEvent::Connected { .. })),
-        Some(LinkEvent::Connected { has_ptz: true, .. })
+        Some(LinkEvent::Connected { has_ptz: true, main_size: Some((2880, 1620)), .. })
     ));
     let motion: Vec<bool> =
         evs.iter().filter_map(|e| if let LinkEvent::Detection { active, .. } = e { Some(*active) } else { None }).collect();

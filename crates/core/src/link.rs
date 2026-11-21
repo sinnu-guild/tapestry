@@ -33,6 +33,8 @@ pub enum LinkEvent {
         info: DeviceInfo,
         has_ptz: bool,
         presets: Vec<Preset>,
+        /// Main stream picture size from ONVIF, if reported.
+        main_size: Option<(u32, u32)>,
     },
     /// Connected, but the camera won't give us events (no motion alerts).
     EventsUnavailable(String),
@@ -131,7 +133,7 @@ fn link_loop(
         backoff_idx = 0;
         let presets = if client.has_ptz() { client.presets().unwrap_or_default() } else { Vec::new() };
         *shared.lock().unwrap() = Some(client.clone());
-        emit(LinkEvent::Connected { info, has_ptz: client.has_ptz(), presets });
+        emit(LinkEvent::Connected { info, has_ptz: client.has_ptz(), presets, main_size: client.main_size });
 
         // Event loop.
         match client.subscribe(SUB_LIFETIME) {

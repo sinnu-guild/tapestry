@@ -34,6 +34,8 @@ pub struct CameraState {
     pub info: Option<DeviceInfo>,
     pub has_ptz: bool,
     pub presets: Vec<Preset>,
+    /// Main stream picture size from ONVIF, once connected.
+    pub main_size: Option<(u32, u32)>,
     pub motion: bool,
     pub motion_since: Option<SystemTime>,
     pub last_motion: Option<SystemTime>,
@@ -98,6 +100,7 @@ impl Engine {
                     info: None,
                     has_ptz: false,
                     presets: Vec::new(),
+                    main_size: None,
                     motion: false,
                     motion_since: None,
                     last_motion: None,
@@ -307,13 +310,14 @@ impl Worker {
                     st[i].link = LinkState::Connecting;
                 }
             }
-            LinkEvent::Connected { info, has_ptz, presets } => {
+            LinkEvent::Connected { info, has_ptz, presets, main_size } => {
                 let was = self.state.lock().unwrap()[i].link.clone();
                 {
                     let mut st = self.state.lock().unwrap();
                     st[i].link = LinkState::Online;
                     st[i].has_ptz = has_ptz;
                     st[i].presets = presets;
+                    st[i].main_size = main_size;
                     st[i].info = Some(info.clone());
                 }
                 if was != LinkState::Online {
