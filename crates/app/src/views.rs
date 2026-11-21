@@ -429,11 +429,28 @@ impl TapestryApp {
         f.center.y = f.center.y.clamp(half, 1.0 - half);
         let uv = Rect::from_center_size(f.center, vec2(1.0 / f.zoom, 1.0 / f.zoom));
 
-        if let Some(tex) = &f.view.tex {
+        // Until the full-quality picture arrives, show the grid stream's.
+        let stand_in = if f.view.tex.is_none() { self.tiles.get(cam).and_then(|t| t.tex.as_ref()) } else { None };
+        if let Some(tex) = f.view.tex.as_ref().or(stand_in) {
             painter.image(tex.id(), video, uv, Color32::WHITE);
         }
-        if let Some((msg, _)) = &problem {
-            if f.view.tex.is_some() {
+        let connecting = matches!(
+            f.view.stream.as_ref().map(|s| s.status()),
+            Some(StreamStatus::Connecting) | Some(StreamStatus::Live)
+        );
+        if stand_in.is_some() && connecting {
+            pill(
+                &painter,
+                video.left_bottom() + vec2(12.0, -12.0),
+                Align2::LEFT_BOTTOM,
+                "Loading full quality…",
+                theme::TEXT,
+                Color32::from_black_alpha(170),
+                12.0,
+            );
+            ui.ctx().request_repaint_after(Duration::from_millis(150));
+        } else if let Some((msg, _)) = &problem {
+            if f.view.tex.is_some() || stand_in.is_some() {
                 painter.rect_filled(video, 0.0, Color32::from_black_alpha(150));
             }
             painter.text(video.center(), Align2::CENTER_CENTER, msg, FontId::proportional(16.0), theme::MUTED);
