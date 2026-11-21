@@ -78,8 +78,23 @@ impl StreamSpec {
             "fps={fps},scale={w}:{h}:force_original_aspect_ratio=decrease:flags=bilinear,pad={w}:{h}:(ow-iw)/2:(oh-ih)/2",
             fps = self.fps.max(1)
         ));
-        a.extend(["-pix_fmt", "rgba", "-f", "rawvideo", "pipe:1"].map(String::from));
+        // The fps filter already sets the rate; don't let the output stage
+        // duplicate or drop frames again based on (unreliable) timestamps.
+        a.extend(["-pix_fmt", "rgba", "-fps_mode", "passthrough", "-f", "rawvideo", "pipe:1"].map(String::from));
         a
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn output_passes_frames_through() {
+        let a = StreamSpec::rtsp("rtsp://cam/stream2", 640, 360, 12).args();
+        let mode = a.iter().position(|x| x == "-fps_mode").expect("fps_mode set");
+        assert_eq!(a[mode + 1], "passthrough");
+        assert!(mode < a.iter().position(|x| x == "rawvideo").unwrap(), "must come before the output");
     }
 }
 
