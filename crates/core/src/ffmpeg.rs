@@ -262,6 +262,8 @@ pub fn friendly_error(raw: &str) -> String {
         "Camera not reachable — check it's on and on the same network".into()
     } else if l.contains("453") || l.contains("not enough bandwidth") || l.contains("503") {
         "Camera is busy (too many viewers?)".into()
+    } else if l.contains("does not contain any stream") {
+        "Camera isn't sending sound (is its microphone turned off in the Tapo app?)".into()
     } else if l.is_empty() {
         "Stream ended".into()
     } else {

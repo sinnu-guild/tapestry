@@ -160,12 +160,17 @@ pub struct Config {
     /// Flash the taskbar button when motion happens while Tapestry isn't focused.
     pub flash_taskbar: bool,
     pub always_on_top: bool,
-    /// Frame rate for the grid tiles (lower = less CPU).
+    /// Frame-rate cap for the grid tiles (lower = less CPU). `GRID_FPS_NATIVE`
+    /// or more means no cap: each camera plays at its own rate.
     pub grid_fps: u32,
     /// Click on the focused video to aim the camera there.
     pub click_to_aim: bool,
     /// How far one click-to-aim moves, relative units (tuned per camera).
     pub aim_gain: f32,
+    /// Play the open camera's sound.
+    pub sound: bool,
+    /// Sound volume in percent (camera audio is quiet, so up to 400).
+    pub sound_volume: u32,
     pub cameras: Vec<Camera>,
 }
 
@@ -184,6 +189,8 @@ impl Default for Config {
             grid_fps: 25,
             click_to_aim: true,
             aim_gain: 0.35,
+            sound: true,
+            sound_volume: 200,
             cameras: Vec::new(),
         }
     }
@@ -237,7 +244,15 @@ fn quote_if_needed(v: &str) -> String {
     }
 }
 
+/// `grid_fps` at or above this means "each camera's own rate" (no cap).
+pub const GRID_FPS_NATIVE: u32 = 25;
+
 impl Config {
+    /// The grid's frame-rate cap, or `None` to play each camera at its own rate.
+    pub fn grid_fps_cap(&self) -> Option<u32> {
+        (self.grid_fps < GRID_FPS_NATIVE).then_some(self.grid_fps.max(1))
+    }
+
     /// Parse INI text. Unknown keys are ignored; problems are returned as warnings.
     pub fn parse(text: &str) -> (Config, Vec<String>) {
         let mut cfg = Config { cameras: Vec::new(), ..Config::default() };
@@ -285,6 +300,8 @@ impl Config {
                     "flash_taskbar" => parse_bool(&val).map(|v| cfg.flash_taskbar = v).unwrap_or_else(bad),
                     "always_on_top" => parse_bool(&val).map(|v| cfg.always_on_top = v).unwrap_or_else(bad),
                     "click_to_aim" => parse_bool(&val).map(|v| cfg.click_to_aim = v).unwrap_or_else(bad),
+                    "sound" => parse_bool(&val).map(|v| cfg.sound = v).unwrap_or_else(bad),
+                    "sound_volume" => val.parse().map(|v: u32| cfg.sound_volume = v.min(400)).unwrap_or_else(|_| bad()),
                     _ => {}
                 },
                 "camera" => {
@@ -336,6 +353,9 @@ impl Config {
         let _ = writeln!(s, "grid_fps = {}", self.grid_fps);
         let _ = writeln!(s, "click_to_aim = {}", self.click_to_aim);
         let _ = writeln!(s, "aim_gain = {}", self.aim_gain);
+        let _ = writeln!(s, "sound = {}", self.sound);
+        let _ = writeln!(s, "# percent, 0-400");
+        let _ = writeln!(s, "sound_volume = {}", self.sound_volume);
         for c in &self.cameras {
             let _ = writeln!(s);
             let _ = writeln!(s, "[camera]");
@@ -391,6 +411,8 @@ mod tests {
         let mut cfg = Config::default();
         cfg.record_mode = RecordMode::Continuous;
         cfg.keep_days = 30;
+        cfg.sound = false;
+        cfg.sound_volume = 350;
         cfg.cameras.push(Camera {
             name: "Front Gate".into(),
             host: "192.168.1.21".into(),
