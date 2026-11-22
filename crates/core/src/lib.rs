@@ -7,6 +7,7 @@
 //! Deliberately dependency-free (std only), so it builds offline and is easy
 //! to audit.
 
+pub mod audio;
 pub mod clips;
 pub mod color;
 pub mod config;
@@ -21,6 +22,7 @@ pub mod stream;
 pub mod time;
 pub mod xml;
 
+pub use audio::AudioStream;
 pub use color::ColorInfo;
 pub use config::{Camera, Config, Quality, RecordMode};
 pub use engine::{CameraState, Engine, EngineOptions, LinkState, LogEntry, LogLevel};
