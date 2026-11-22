@@ -8,6 +8,7 @@
 //! to audit.
 
 pub mod clips;
+pub mod color;
 pub mod config;
 pub mod crypto;
 pub mod engine;
@@ -20,6 +21,7 @@ pub mod stream;
 pub mod time;
 pub mod xml;
 
+pub use color::ColorInfo;
 pub use config::{Camera, Config, Quality, RecordMode};
 pub use engine::{CameraState, Engine, EngineOptions, LinkState, LogEntry, LogLevel};
 pub use link::PtzCommand;
