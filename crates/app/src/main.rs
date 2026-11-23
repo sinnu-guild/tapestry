@@ -6,6 +6,7 @@ mod clips_panel;
 mod settings;
 mod theme;
 mod util;
+mod video_gl;
 mod views;
 
 use eframe::egui;
