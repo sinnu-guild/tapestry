@@ -8,6 +8,7 @@ with pan/tilt, motion alerts, and clips saved to your PC.
   - **Pan/tilt**: hold the on-screen arrows, arrow keys or `WASD` (`Shift` = slow)
   - **Click-to-aim**: click anywhere on the video and the camera turns toward it
   - **Digital zoom**: scroll to zoom into the 3K picture, drag to look around
+  - **Sound** from the camera's microphone (`M` to mute, right-click for volume)
   - **Presets** (if you've saved any in the Tapo app), **Snapshot** (`Ctrl+S`), **Record 5 min** (`R`)
   - The other cameras stay visible in a strip down the side
 - **Motion alerts**: tiles glow red, the window title says `● Motion: Garden`, and the taskbar
@@ -75,6 +76,7 @@ login) and press **Test connection** on each one. When all three show green tick
 | Arrows / `WASD` | Pan/tilt the open camera (hold `Shift` for slow) |
 | `Ctrl+S` | Snapshot (full resolution JPEG) |
 | `R` | Record now for 5 minutes / stop |
+| `M` | Sound on/off for the open camera (right-click the sound button for volume) |
 | `C` | Clips panel |
 | `P` | Pin on top of other windows |
 | `F` / `F11` | Fullscreen |

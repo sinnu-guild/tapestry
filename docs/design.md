@@ -20,8 +20,11 @@ the phone.
 - No two-way audio (not in Profile S).
 
 ## Approach
-- **Video:** FFmpeg runs as a child process. It decodes RTSP to fixed-size RGBA frames on a pipe,
-  and records with `-c:v copy` to fragmented MP4. Chosen over linking libav/GStreamer
+- **Video:** FFmpeg runs as a child process. It decodes RTSP on the GPU (`-hwaccel d3d11va`,
+  software fallback) to fixed-size NV12 frames on a pipe, at each camera's own frame rate, and
+  records with `-c:v copy` to fragmented MP4. The app uploads NV12 as two textures and a small
+  OpenGL shader does YUV→RGB (range read from FFmpeg's stream summary; maths checked against
+  FFmpeg's RGB in `ffmpeg_pipeline.rs`). RGB conversion in FFmpeg cost more CPU than decoding. Chosen over linking libav/GStreamer
   (painful on Windows) and over pure-Rust RTSP + OpenH264 (no H.265, and more code to own).
 - **Control and events:** a hand-written ONVIF SOAP client (std-only HTTP, XML, SHA-1, WS-Security
   digest, clock-offset sync). Uses ContinuousMove/Stop for pan/tilt, falls back to RelativeMove
