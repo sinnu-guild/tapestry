@@ -2,29 +2,32 @@
 //! side panel in `clips_panel.rs`, settings in `settings.rs`.
 
 use crate::settings::SettingsDraft;
+use crate::video_gl::{VideoRenderer, VideoTexture};
 use crate::{theme, util};
-use eframe::egui::{self, Color32, RichText, TextureHandle, TextureOptions};
+use eframe::egui::{self, Color32, RichText};
+use eframe::glow;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
 use tapestry_core::clips::{Clip, MotionSpan};
 use tapestry_core::{
-    ffmpeg, CameraState, Config, Engine, EngineOptions, Frame, LinkState, PtzCommand, Quality, StreamSpec, StreamStatus,
+    ffmpeg, AudioStream, CameraState, Config, Engine, EngineOptions, LinkState, PtzCommand, Quality, StreamSpec, StreamStatus,
     VideoStream,
 };
 
 /// Grid tiles use the camera's low-quality stream at this size.
 pub const GRID_SIZE: [u32; 2] = [640, 360];
-/// The focused camera uses the high-quality stream at this size.
+/// The focused camera uses the high-quality stream at this size, at the
+/// camera's own frame rate.
 pub const FOCUS_SIZE: [u32; 2] = [1920, 1080];
-pub const FOCUS_FPS: u32 = 25;
 pub const PLAYBACK_SIZE: [u32; 2] = [1600, 900];
 pub const PLAYBACK_FPS: u32 = 15;
 
 /// A video stream plus the GPU texture it feeds.
 pub struct LiveView {
     pub stream: Option<VideoStream>,
-    pub tex: Option<TextureHandle>,
+    pub tex: Option<VideoTexture>,
     pub seq: u64,
 }
 
@@ -33,26 +36,17 @@ impl LiveView {
         LiveView { stream, tex: None, seq: 0 }
     }
 
-    /// Upload the newest frame (if any) to the texture.
-    pub fn upload(&mut self, ctx: &egui::Context, name: &str) {
+    /// Upload the newest frame (if any) straight from the stream's buffer to the GPU.
+    pub fn upload(&mut self, gpu: Option<(&glow::Context, &VideoRenderer)>) {
         let Some(frame) = self.stream.as_ref().and_then(|s| s.latest()) else { return };
         if frame.seq == self.seq {
             return;
         }
         self.seq = frame.seq;
-        let img = to_image(&frame);
-        match &mut self.tex {
-            Some(t) => t.set(img, TextureOptions::LINEAR),
-            None => self.tex = Some(ctx.load_texture(name, img, TextureOptions::LINEAR)),
+        if let Some((gl, renderer)) = gpu {
+            renderer.upload(gl, &mut self.tex, &frame);
         }
     }
-}
-
-fn to_image(f: &Frame) -> egui::ColorImage {
-    // FFmpeg's RGBA output is always opaque, so premultiplied == unmultiplied
-    // and a straight copy is enough (much cheaper than per-pixel conversion
-    // at 2880x1620).
-    egui::ColorImage { size: [f.width as usize, f.height as usize], pixels: bytemuck::cast_slice(&f.rgba).to_vec() }
 }
 
 /// Size to decode the focused camera at: its native main-stream size when
@@ -78,6 +72,8 @@ pub struct Focus {
     /// The camera's grid stream keeps running (and is shown) until the
     /// full-quality stream delivers its first frame; then it's paused.
     pub grid_released: bool,
+    /// The camera's sound, while it's open (and sound is on).
+    pub audio: Option<AudioStream>,
 }
 
 pub struct Playback {
@@ -147,11 +143,20 @@ pub struct TapestryApp {
     pub ptz_sent: Option<(usize, (f32, f32))>,
     pub minimized: bool,
     pub closing: bool,
+    /// Sound volume in percent, shared live with the audio stream.
+    pub volume: Arc<AtomicU32>,
+    /// Draws video frames on the GPU (None if OpenGL couldn't set it up).
+    pub video: Option<Arc<VideoRenderer>>,
 }
 
 impl TapestryApp {
     pub fn new(cc: &eframe::CreationContext<'_>, cfg: Config, warnings: Vec<String>) -> Self {
         theme::apply(&cc.egui_ctx);
+        let video = match cc.gl.as_deref().map(VideoRenderer::new) {
+            Some(Ok(r)) => Ok(Arc::new(r)),
+            Some(Err(e)) => Err(e),
+            None => Err("no OpenGL context".to_string()),
+        };
         let mut app = TapestryApp {
             cfg,
             ffmpeg: None,
@@ -176,7 +181,13 @@ impl TapestryApp {
             ptz_sent: None,
             minimized: false,
             closing: false,
+            volume: Arc::new(AtomicU32::new(0)),
+            video: video.as_ref().ok().cloned(),
         };
+        if let Err(e) = video {
+            app.toast(format!("Can't show video: {e}"), theme::MOTION);
+        }
+        app.volume.store(app.cfg.sound_volume, Ordering::Relaxed);
         for w in warnings {
             app.toast(format!("Settings: {w}"), theme::WARN);
         }
@@ -214,7 +225,7 @@ impl TapestryApp {
             let stream = self.ffmpeg.clone().map(|ff| {
                 VideoStream::start(
                     ff,
-                    StreamSpec::rtsp(&cam.rtsp_url(Quality::Sub), GRID_SIZE[0], GRID_SIZE[1], self.cfg.grid_fps),
+                    StreamSpec::rtsp(&cam.rtsp_url(Quality::Sub), GRID_SIZE[0], GRID_SIZE[1], self.cfg.grid_fps_cap()),
                     Some(waker.clone()),
                 )
             });
@@ -241,7 +252,7 @@ impl TapestryApp {
         let stream = self.ffmpeg.clone().map(|ff| {
             VideoStream::start(
                 ff,
-                StreamSpec::rtsp(&self.cfg.cameras[cam].rtsp_url(Quality::Main), w, h, FOCUS_FPS),
+                StreamSpec::rtsp(&self.cfg.cameras[cam].rtsp_url(Quality::Main), w, h, None),
                 Some(waker(ctx)),
             )
         });
@@ -254,6 +265,7 @@ impl TapestryApp {
             center: egui::pos2(0.5, 0.5),
             aim_flash: None,
             grid_released: false,
+            audio: None,
         });
         self.center = Center::Focus;
     }
@@ -379,6 +391,36 @@ impl TapestryApp {
         }
     }
 
+    /// Start the open camera's sound, if sound is on and nothing's stopping it.
+    pub fn start_audio(&mut self, ctx: &egui::Context) {
+        let Some(ff) = self.ffmpeg.clone() else { return };
+        let Some(f) = self.focus.as_mut() else { return };
+        // Wait until the grid stand-in is released, so the camera never
+        // has more than three viewers (recorder, full quality, sound).
+        if !self.cfg.sound || f.audio.is_some() || !f.grid_released || self.minimized {
+            return;
+        }
+        let Some(cam) = self.cfg.cameras.get(f.cam) else { return };
+        // The sub stream: same sound, far less video to throw away.
+        f.audio = Some(AudioStream::rtsp(ff, &cam.rtsp_url(Quality::Sub), self.volume.clone(), Some(waker(ctx))));
+    }
+
+    /// Mute / unmute (M). Remembered across restarts.
+    pub fn toggle_sound(&mut self, ctx: &egui::Context) {
+        self.cfg.sound = !self.cfg.sound;
+        if self.cfg.sound {
+            self.start_audio(ctx);
+        } else if let Some(f) = self.focus.as_mut() {
+            f.audio = None;
+        }
+        self.save_config();
+    }
+
+    pub fn set_volume(&mut self, percent: u32) {
+        self.cfg.sound_volume = percent.min(tapestry_core::audio::MAX_VOLUME);
+        self.volume.store(self.cfg.sound_volume, Ordering::Relaxed);
+    }
+
     pub fn save_config(&mut self) {
         if let Err(e) = self.cfg.save() {
             self.toast(format!("Couldn't save settings: {e}"), theme::MOTION);
@@ -411,6 +453,9 @@ impl TapestryApp {
                 if let Some(s) = &f.view.stream {
                     s.set_paused(minimized);
                 }
+                if let Some(a) = &f.audio {
+                    a.set_paused(minimized);
+                }
             }
         }
 
@@ -438,12 +483,18 @@ impl TapestryApp {
         }
     }
 
-    fn upload(&mut self, ctx: &egui::Context) {
-        for (i, t) in self.tiles.iter_mut().enumerate() {
-            t.upload(ctx, &format!("tile-{i}"));
+    fn upload(&mut self, ctx: &egui::Context, gl: Option<&Arc<glow::Context>>) {
+        let renderer = self.video.clone();
+        let gpu = gl.map(|g| &**g).zip(renderer.as_deref());
+        if let Some((gl, r)) = gpu {
+            r.free_unused(gl);
         }
+        for t in self.tiles.iter_mut() {
+            t.upload(gpu);
+        }
+        let mut released_now = false;
         if let Some(f) = &mut self.focus {
-            f.view.upload(ctx, "focus");
+            f.view.upload(gpu);
             if !f.grid_released {
                 // Release the stand-in grid stream once the full-quality picture
                 // is up, or as soon as the camera refuses/drops the extra viewer.
@@ -452,14 +503,18 @@ impl TapestryApp {
                     || matches!(status, None | Some(StreamStatus::Retrying { .. }) | Some(StreamStatus::Failed(_)));
                 if ready {
                     f.grid_released = true;
+                    released_now = true;
                     if let Some(s) = self.tiles.get(f.cam).and_then(|t| t.stream.as_ref()) {
                         s.set_paused(true);
                     }
                 }
             }
         }
+        if released_now {
+            self.start_audio(ctx);
+        }
         if let Some(p) = &mut self.playback {
-            p.view.upload(ctx, "playback");
+            p.view.upload(gpu);
             // Seeking while paused: show the first frame at the new spot, then hold.
             let got_frame = p.view.stream.as_ref().map_or(false, |s| s.frames_this_run() > 0);
             if p.paused_at.is_some() && p.view.seq > 0 && got_frame {
@@ -472,7 +527,7 @@ impl TapestryApp {
         if ctx.wants_keyboard_input() {
             return;
         }
-        let (esc, digits, c_key, s_key, r_key, p_key, f_key, space, left, right) = ctx.input(|i| {
+        let (esc, digits, c_key, s_key, r_key, p_key, f_key, space, left, right, m_key) = ctx.input(|i| {
             let digits: Vec<usize> = [
                 egui::Key::Num1,
                 egui::Key::Num2,
@@ -500,6 +555,7 @@ impl TapestryApp {
                 i.key_pressed(egui::Key::Space),
                 i.key_pressed(egui::Key::ArrowLeft),
                 i.key_pressed(egui::Key::ArrowRight),
+                i.key_pressed(egui::Key::M) && !i.modifiers.any(),
             )
         });
 
@@ -533,6 +589,9 @@ impl TapestryApp {
                 }
                 if r_key {
                     self.record_now(cam);
+                }
+                if m_key {
+                    self.toggle_sound(ctx);
                 }
             }
             Center::Playback => {
@@ -696,7 +755,7 @@ impl TapestryApp {
                         ui.label(RichText::new(mode).color(theme::MUTED).small());
                         ui.separator();
                         ui.label(
-                            RichText::new("1-9 camera · Esc grid · C clips · P pin · F fullscreen").color(theme::MUTED).small(),
+                            RichText::new("1-9 camera · Esc grid · M sound · C clips · P pin · F fullscreen").color(theme::MUTED).small(),
                         );
                     });
                 });
@@ -757,7 +816,7 @@ impl TapestryApp {
 }
 
 impl eframe::App for TapestryApp {
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+    fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         if ctx.input(|i| i.viewport().close_requested()) && !self.closing {
             // Finish any recording cleanly before the window goes.
             self.closing = true;
@@ -776,6 +835,9 @@ impl eframe::App for TapestryApp {
             for s in streams {
                 s.stop();
             }
+            if let Some(a) = self.focus.as_mut().and_then(|f| f.audio.as_mut()) {
+                a.stop();
+            }
             self.tiles.clear();
             self.focus = None;
             self.playback = None;
@@ -786,7 +848,7 @@ impl eframe::App for TapestryApp {
         }
 
         self.poll(ctx);
-        self.upload(ctx);
+        self.upload(ctx, frame.gl());
         self.keys(ctx);
 
         self.top_bar(ctx);

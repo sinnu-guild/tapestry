@@ -2,7 +2,7 @@
 //! click-to-aim and digital zoom), and clip playback.
 
 use crate::app::{pulse, status_dot, Center, TapestryApp};
-use crate::{theme, util};
+use crate::{theme, util, video_gl};
 use eframe::egui::{self, pos2, vec2, Align2, Color32, FontId, Id, Rect, RichText, Sense, Stroke};
 use std::time::{Duration, SystemTime};
 use tapestry_core::{LinkState, PtzCommand, StreamStatus};
@@ -44,7 +44,7 @@ impl TapestryApp {
         painter.rect_filled(rect, 8.0, theme::TILE);
         let video = util::fit_aspect(rect, ASPECT);
         let has_tex = if let Some(tex) = self.tiles.get(i).and_then(|t| t.tex.as_ref()) {
-            painter.image(tex.id(), video, FULL_UV, Color32::WHITE);
+            video_gl::paint(self.video.as_ref(), &painter, video, FULL_UV, tex);
             true
         } else {
             false
@@ -355,6 +355,7 @@ impl TapestryApp {
                         self.clips_cam = self.cfg.cameras.get(cam).map(|c| c.slug());
                         self.show_clips = true;
                     }
+                    self.sound_button(ui);
                     let manual = c.as_ref().and_then(|c| c.manual_until);
                     let label = match manual {
                         Some(until) => {
@@ -385,6 +386,42 @@ impl TapestryApp {
                     }
                 });
             });
+        });
+    }
+
+    /// Mute toggle (click or M) with a volume slider on right-click.
+    fn sound_button(&mut self, ui: &mut egui::Ui) {
+        let audio = self.focus.as_ref().and_then(|f| f.audio.as_ref()).map(|a| (a.status(), a.output_error()));
+        let vol = self.cfg.sound_volume;
+        let (label, tip, color) = if !self.cfg.sound {
+            ("🔇 Muted".to_string(), "Sound off. Click or press M to turn it on.".to_string(), theme::MUTED)
+        } else {
+            match audio {
+                Some((_, Some(err))) => ("🔇 No sound".into(), format!("This PC can't play sound: {err}"), theme::WARN),
+                Some((StreamStatus::Live, None)) => (format!("🔊 {vol}%"), "Sound on. Click or press M to mute.".into(), theme::TEXT),
+                Some((StreamStatus::Retrying { error, .. }, None)) | Some((StreamStatus::Failed(error), None)) => {
+                    ("🔇 No sound".into(), error, theme::WARN)
+                }
+                // Waiting for the full-quality picture, or connecting.
+                _ => ("🔊 …".into(), "Sound is starting. Click or press M to mute.".into(), theme::MUTED),
+            }
+        };
+        let resp = ui.button(RichText::new(label).color(color)).on_hover_text(format!("{tip}\nRight-click for volume."));
+        if resp.clicked() {
+            self.toggle_sound(&ui.ctx().clone());
+        }
+        resp.context_menu(|ui| {
+            let mut v = self.cfg.sound_volume;
+            let s = ui.add(
+                egui::Slider::new(&mut v, 0..=tapestry_core::audio::MAX_VOLUME).suffix("%").text("Volume").step_by(10.0),
+            );
+            if s.changed() {
+                self.set_volume(v);
+            }
+            if s.drag_stopped() || (s.changed() && !s.dragged()) {
+                self.save_config();
+            }
+            ui.weak("Camera microphones are quiet, so 200% is normal.");
         });
     }
 
@@ -432,7 +469,7 @@ impl TapestryApp {
         // Until the full-quality picture arrives, show the grid stream's.
         let stand_in = if f.view.tex.is_none() { self.tiles.get(cam).and_then(|t| t.tex.as_ref()) } else { None };
         if let Some(tex) = f.view.tex.as_ref().or(stand_in) {
-            painter.image(tex.id(), video, uv, Color32::WHITE);
+            video_gl::paint(self.video.as_ref(), &painter, video, uv, tex);
         }
         let connecting = matches!(
             f.view.stream.as_ref().map(|s| s.status()),
@@ -666,7 +703,7 @@ impl TapestryApp {
         painter.rect_filled(area, 8.0, theme::TILE);
         let video = util::fit_aspect(area, ASPECT);
         if let Some(tex) = &pb.view.tex {
-            painter.image(tex.id(), video, FULL_UV, Color32::WHITE);
+            video_gl::paint(self.video.as_ref(), &painter, video, FULL_UV, tex);
         }
         let status = pb.view.stream.as_ref().map(|s| s.status());
         let paused = pb.paused_at.is_some();

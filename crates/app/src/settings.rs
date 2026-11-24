@@ -147,6 +147,8 @@ impl TapestryApp {
                         c.name = format!("Camera {}", i + 1);
                     }
                 }
+                d.cfg.sound = self.cfg.sound;
+                d.cfg.sound_volume = self.cfg.sound_volume;
                 self.cfg = d.cfg;
                 self.save_config();
                 self.restart(ctx);
@@ -343,10 +345,21 @@ fn general_tab(ui: &mut egui::Ui, d: &mut SettingsDraft) {
     ui.label(RichText::new("Wall").strong());
     egui::Grid::new("gen-grid").num_columns(2).spacing([12.0, 10.0]).show(ui, |ui| {
         ui.label("Grid frame rate");
-        ui.add(egui::Slider::new(&mut c.grid_fps, 2..=25).suffix(" fps"));
+        c.grid_fps = c.grid_fps.min(tapestry_core::config::GRID_FPS_NATIVE);
+        ui.add(egui::Slider::new(&mut c.grid_fps, 2..=tapestry_core::config::GRID_FPS_NATIVE).custom_formatter(|v, _| {
+            if v as u32 >= tapestry_core::config::GRID_FPS_NATIVE {
+                "Native".into()
+            } else {
+                format!("{v:.0} fps")
+            }
+        }));
         ui.end_row();
         ui.label("");
-        ui.label(RichText::new("Lower = less CPU. The camera you open always plays at full rate.").color(theme::MUTED).small());
+        ui.label(
+            RichText::new("Native = every frame each camera sends. Lower = less CPU. The camera you open always plays at full rate.")
+                .color(theme::MUTED)
+                .small(),
+        );
         ui.end_row();
     });
     ui.checkbox(&mut c.flash_taskbar, "Flash the taskbar button when there's motion and Tapestry isn't in front");
