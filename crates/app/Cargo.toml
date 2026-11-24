@@ -10,5 +10,7 @@ tapestry-core = { path = "../core" }
 # Pinned so the UI code matches the egui API it was written against.
 eframe = "=0.29.1"
 chrono = "0.4"
-# Zero-cost cast of FFmpeg RGBA bytes into egui pixels (already used by egui).
-bytemuck = "1"
+
+[build-dependencies]
+# Puts assets/tapestry.ico into the .exe (see build.rs).
+winresource = "0.1"

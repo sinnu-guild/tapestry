@@ -46,34 +46,8 @@ pub fn apply(ctx: &egui::Context) {
     ctx.set_style(style);
 }
 
-/// A small woven square, drawn in code: amber weft over teal warp.
+/// Window/taskbar icon: the same artwork as the .exe icon (assets/tapestry.ico),
+/// stored as raw 64×64 RGBA so no image decoder is needed.
 pub fn window_icon() -> egui::IconData {
-    const N: u32 = 64;
-    let mut rgba = Vec::with_capacity((N * N * 4) as usize);
-    let band = 8u32;
-    for y in 0..N {
-        for x in 0..N {
-            let (bx, by) = (x / band, y / band);
-            let in_x_gap = x % band == 0 || x % band == band - 1;
-            let in_y_gap = y % band == 0 || y % band == band - 1;
-            // Rounded-square mask.
-            let (cx, cy) = (x as f32 - 31.5, y as f32 - 31.5);
-            let r = 12.0;
-            let qx = (cx.abs() - (32.0 - r)).max(0.0);
-            let qy = (cy.abs() - (32.0 - r)).max(0.0);
-            let inside = (qx * qx + qy * qy).sqrt() <= r;
-            let over = (bx + by) % 2 == 0;
-            let c = if !inside {
-                [0, 0, 0, 0]
-            } else if over && !in_y_gap {
-                [AMBER.r(), AMBER.g(), AMBER.b(), 255]
-            } else if !over && !in_x_gap {
-                [TEAL.r(), TEAL.g(), TEAL.b(), 255]
-            } else {
-                [0x15, 0x17, 0x1B, 255]
-            };
-            rgba.extend_from_slice(&c);
-        }
-    }
-    egui::IconData { rgba, width: N, height: N }
+    egui::IconData { rgba: include_bytes!("../assets/icon-64.rgba").to_vec(), width: 64, height: 64 }
 }
