@@ -1,5 +1,9 @@
 # Tapestry
 
+[![Latest release](https://img.shields.io/github/v/release/sinnu-guild/tapestry)](https://github.com/sinnu-guild/tapestry/releases/latest)
+[![CI](https://github.com/sinnu-guild/tapestry/actions/workflows/ci.yml/badge.svg)](https://github.com/sinnu-guild/tapestry/actions/workflows/ci.yml)
+[![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue)](#license)
+
 A desktop wall for your Tapo cameras. All of them live in one window you can alt-tab to,
 with pan/tilt, motion alerts, and clips saved to your PC.
 
@@ -29,7 +33,10 @@ Tapestry is a free, open-source answer for wired Tapo cameras on your home netwo
 - **Pin on top** (`P`) and **fullscreen** (`F`)
 
 Everything uses the cameras' official local protocols (RTSP for video, ONVIF for pan/tilt and
-motion). Nothing goes through the cloud, and firmware updates shouldn't break it.
+motion). Nothing goes through the cloud, and firmware updates shouldn't break it. No account,
+no telemetry: Tapestry only talks to your cameras.
+
+**Needs:** Windows 10 or 11 (64-bit), and wired Tapo cameras on the same network as your PC.
 
 ![One camera open full size, with pan/tilt pad and the other cameras down the side](docs/focus.png)
 
@@ -55,8 +62,10 @@ While you're there, note each camera's **IP address** (**Settings → Device Inf
 reserving those IPs in your router (look for "DHCP reservation" or "address reservation"),
 so the cameras keep the same address.
 
-> Works with: C230 ✓, C530WS ✓. (Battery cameras like the C410/C420/C425 don't offer local
-> video.)
+> Tested with the C230 and C530WS. Other wired Tapo cameras that have a Camera Account setting
+> should work too. If yours does (or doesn't), please [open an issue](https://github.com/sinnu-guild/tapestry/issues)
+> so this list can grow. Battery cameras like the C410/C420/C425 don't offer local video, so they
+> can't work.
 
 ### 2. Get Tapestry
 
@@ -139,15 +148,6 @@ camera-only logins, not your TP-Link account, so the risk is small. Still, don't
 
 ## Troubleshooting
 
-**Check a camera from the command line.** This prints the model, streams, pan/tilt support
-and presets, and listens for motion for 20 seconds:
-
-```
-cargo run --release -p tapestry-core --bin tapestry-probe -- 192.168.1.50 myuser mypass --wiggle
-```
-
-`--wiggle` turns the camera briefly right then left to prove pan/tilt works.
-
 | Symptom | Likely cause |
 |---|---|
 | "Wrong camera username/password" | Use the Camera Account, not your TP-Link login |
@@ -156,17 +156,36 @@ cargo run --release -p tapestry-core --bin tapestry-probe -- 192.168.1.50 myuser
 | Video works but no motion alerts | Check that motion detection is on in the Tapo app for that camera |
 | Click-to-aim overshoots | Settings → General → lower "Aim strength" |
 | Pan/tilt goes the wrong way | Settings → camera → Advanced → "mounted upside down" |
+| "FFmpeg not found" | Keep `ffmpeg.exe` from the zip next to `tapestry.exe` |
+
+Still stuck? [Open an issue](https://github.com/sinnu-guild/tapestry/issues) with your camera
+model and the message you see (**Activity** in the top bar shows recent ones). Please leave out
+passwords, and don't post camera screenshots that show your home.
+
+**For developers: check a camera from the command line.** With the source code and Rust, this
+prints the model, streams, pan/tilt support and presets, and listens for motion for 20 seconds:
+
+```
+cargo run --release -p tapestry-core --bin tapestry-probe -- 192.168.1.50 myuser mypass --wiggle
+```
+
+`--wiggle` turns the camera briefly right then left to prove pan/tilt works.
 
 ## Project layout
 
 ```
 crates/core   tapestry-core: ONVIF client, FFmpeg streams, recorder, clips, engine.
               No dependencies beyond Rust's standard library.
-              `cargo test -p tapestry-core` runs 44 tests, including a fake Tapo camera.
+              `cargo test -p tapestry-core` runs the tests, including a fake Tapo camera.
 crates/app    tapestry: the window (egui/eframe).
 docs/         design notes and screenshots.
 packaging/    extra files for the release zip (FFmpeg notice).
 ```
+
+## Contributing
+
+Bug reports, camera compatibility reports and pull requests are welcome. For anything bigger
+than a small fix, please open an issue first so we can talk it through.
 
 ## License
 
