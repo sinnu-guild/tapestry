@@ -58,24 +58,23 @@ so the cameras keep the same address.
 > Works with: C230 ✓, C530WS ✓. (Battery cameras like the C410/C420/C425 don't offer local
 > video.)
 
-### 2. Install FFmpeg (Tapestry uses it for all video)
+### 2. Get Tapestry
 
-In PowerShell:
+Download `tapestry-<version>-windows-x64.zip` from the
+[latest release](https://github.com/sinnu-guild/tapestry/releases/latest) and extract it anywhere
+(e.g. `C:\Tools`). Run `tapestry.exe` from the extracted `Tapestry` folder, and right-click it to pin
+it to the taskbar or Start. Windows SmartScreen may warn about an unsigned app the first time:
+**More info → Run anyway**.
 
-```
-winget install Gyan.FFmpeg
-```
-
-Then open a **new** terminal window and check it with `ffmpeg -version`.
-
-### 3. Get Tapestry
-
-Download `tapestry.exe` from the [latest release](https://github.com/sinnu-guild/tapestry/releases/latest)
-and put it anywhere (e.g. `C:\Tools\Tapestry`). Right-click it and pin it to the taskbar or Start.
-Windows SmartScreen may warn about an unsigned app the first time: **More info → Run anyway**.
+FFmpeg, which Tapestry uses for all video, is included in the zip (`ffmpeg.exe`), so there's
+nothing else to install. To update Tapestry later, replace just `tapestry.exe` with the one from
+the newest release.
 
 <details>
 <summary>Or build it yourself</summary>
+
+You also need FFmpeg. In PowerShell: `winget install Gyan.FFmpeg` (Tapestry finds it there
+automatically), or put `ffmpeg.exe` next to `tapestry.exe`.
 
 You need Rust ([rustup.rs](https://rustup.rs)). If you already have it, run `rustup update`
 first. In this folder:
@@ -165,7 +164,8 @@ crates/core   tapestry-core: ONVIF client, FFmpeg streams, recorder, clips, engi
               No dependencies beyond Rust's standard library.
               `cargo test -p tapestry-core` runs 44 tests, including a fake Tapo camera.
 crates/app    tapestry: the window (egui/eframe).
-docs/         design notes.
+docs/         design notes and screenshots.
+packaging/    extra files for the release zip (FFmpeg notice).
 ```
 
 ## License
