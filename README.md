@@ -9,6 +9,9 @@ Tapestry is a free, open-source answer for wired Tapo cameras on your home netwo
 
 > Unofficial. Not affiliated with or endorsed by TP-Link. Tapo is a trademark of TP-Link.
 
+![Tapestry showing three cameras in a grid with a "Today" card](docs/grid.png)
+<sub>Camera feeds blurred for privacy.</sub>
+
 - **Live grid** of every camera (low-res streams, light on CPU), plus a "Today" card in the spare slot
 - **Open a camera** (click it, or press `1`–`9`) for the full-quality stream with:
   - **Pan/tilt**: hold the on-screen arrows, arrow keys or `WASD` (`Shift` = slow)
@@ -27,6 +30,16 @@ Tapestry is a free, open-source answer for wired Tapo cameras on your home netwo
 
 Everything uses the cameras' official local protocols (RTSP for video, ONVIF for pan/tilt and
 motion). Nothing goes through the cloud, and firmware updates shouldn't break it.
+
+![One camera open full size, with pan/tilt pad and the other cameras down the side](docs/focus.png)
+
+<details>
+<summary>Settings screenshots</summary>
+
+![Cameras settings: name, IP address and Camera Account login for each camera](docs/settings.png)
+![Recording settings: on motion, all the time or off, plus clip length and cleanup](docs/recording.png)
+
+</details>
 
 ---
 
