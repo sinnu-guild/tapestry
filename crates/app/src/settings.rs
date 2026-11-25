@@ -67,8 +67,8 @@ fn run_test(cam: Camera, ff: Option<PathBuf>, out: Arc<Mutex<TestState>>) {
         };
         let state = match (onvif, video) {
             (Ok(info), Ok(())) => {
-                let ptz = if c.has_ptz() { "pan/tilt ✓" } else { "no pan/tilt" };
-                TestState::Ok(format!("✓ {} (firmware {}) · video ✓ · {ptz}", info.model, info.firmware))
+                let ptz = if c.has_ptz() { "pan/tilt ✔" } else { "no pan/tilt" };
+                TestState::Ok(format!("✔ {} (firmware {}) · video ✔ · {ptz}", info.model, info.firmware))
             }
             (Ok(info), Err(v)) => TestState::Err(format!("Logged in to {} but video failed: {v}", info.model)),
             (Err(e), Ok(())) => TestState::Err(format!("Video works, but pan/tilt & motion alerts failed: {e}")),
@@ -337,8 +337,8 @@ fn general_tab(ui: &mut egui::Ui, d: &mut SettingsDraft) {
         d.ffmpeg_check = (d.cfg.ffmpeg.clone(), ffmpeg::locate(&d.cfg.ffmpeg));
     }
     match &d.ffmpeg_check.1 {
-        Some(p) => ui.label(RichText::new(format!("✓ using {}", p.display())).color(theme::LIVE).small()),
-        None => ui.label(RichText::new("✗ not found — install with: winget install Gyan.FFmpeg").color(theme::MOTION).small()),
+        Some(p) => ui.label(RichText::new(format!("✔ using {}", p.display())).color(theme::LIVE).small()),
+        None => ui.label(RichText::new("✖ not found — install with: winget install Gyan.FFmpeg").color(theme::MOTION).small()),
     };
     ui.add_space(10.0);
 

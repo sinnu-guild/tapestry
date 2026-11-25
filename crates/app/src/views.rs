@@ -708,7 +708,7 @@ impl TapestryApp {
         let status = pb.view.stream.as_ref().map(|s| s.status());
         let paused = pb.paused_at.is_some();
         let overlay = match status {
-            _ if paused => Some("❚❚  paused — Space to play".to_string()),
+            _ if paused => Some("⏸  paused — Space to play".to_string()),
             Some(StreamStatus::Connecting) if pb.view.tex.is_none() => Some("Loading…".into()),
             Some(StreamStatus::Ended) => Some("Finished — Space to replay".into()),
             Some(StreamStatus::Failed(e)) => Some(format!("Can't play this clip: {e}")),
@@ -796,7 +796,7 @@ impl TapestryApp {
                     }
 
                     ui.horizontal(|ui| {
-                        if ui.button(if paused { "▶" } else { "❚❚" }).on_hover_text("Space").clicked() {
+                        if ui.button(if paused { "▶" } else { "⏸" }).on_hover_text("Space").clicked() {
                             self.toggle_pause(&ctx);
                         }
                         if ui.button("⟲ 10s").on_hover_text("←").clicked() {

@@ -44,6 +44,13 @@ pub fn apply(ctx: &egui::Context) {
     style.spacing.item_spacing = egui::vec2(8.0, 6.0);
     style.spacing.button_padding = egui::vec2(10.0, 5.0);
     ctx.set_style(style);
+
+    // egui's UI font (Ubuntu Light) lacks arrows and shapes like → ● ▲ ▼ ◐,
+    // which then render as empty boxes. Hack (already bundled with egui, used
+    // for monospace) has them, so use it as the last fallback.
+    let mut fonts = egui::FontDefinitions::default();
+    fonts.families.entry(egui::FontFamily::Proportional).or_default().push("Hack".to_owned());
+    ctx.set_fonts(fonts);
 }
 
 /// Window/taskbar icon: the same artwork as the .exe icon (assets/tapestry.ico),

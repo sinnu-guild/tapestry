@@ -48,7 +48,7 @@ impl TapestryApp {
                     ui.label(RichText::new(util::bytes(self.clips.usage)).color(theme::MUTED).small())
                         .on_hover_text(format!("{}", self.cfg.recordings_dir.display()));
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.small_button("✕").clicked() {
+                        if ui.small_button("×").clicked() {
                             self.show_clips = false;
                         }
                         if ui.small_button("📂 Folder").clicked() {
