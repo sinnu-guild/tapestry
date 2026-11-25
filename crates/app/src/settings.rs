@@ -176,7 +176,8 @@ fn cameras_tab(ui: &mut egui::Ui, d: &mut SettingsDraft, ff: Option<PathBuf>) {
     let mut remove = None;
     let n = d.cfg.cameras.len();
     for i in 0..n {
-        egui::Frame::none().fill(theme::RAISED).rounding(8.0).inner_margin(egui::Margin::same(10.0)).show(ui, |ui| {
+        // Each card gets its own ID scope, or every card's "Advanced" header collides.
+        ui.push_id(i, |ui| egui::Frame::none().fill(theme::RAISED).rounding(8.0).inner_margin(egui::Margin::same(10.0)).show(ui, |ui| {
             ui.set_width(ui.available_width());
             let cam = &mut d.cfg.cameras[i];
             egui::Grid::new(("cam-grid", i)).num_columns(2).spacing([10.0, 6.0]).show(ui, |ui| {
@@ -240,14 +241,14 @@ fn cameras_tab(ui: &mut egui::Ui, d: &mut SettingsDraft, ff: Option<PathBuf>) {
                     }
                 });
             });
-        });
+        }));
         ui.add_space(6.0);
     }
     if let Some(i) = remove {
         d.cfg.cameras.remove(i);
         d.tests.remove(i);
     }
-    if ui.button("＋ Add camera").clicked() {
+    if ui.button("+ Add camera").clicked() {
         let n = d.cfg.cameras.len() + 1;
         // Copy the login from the previous camera; people often reuse it.
         let (u, p) = d.cfg.cameras.last().map(|c| (c.username.clone(), c.password.clone())).unwrap_or_default();
