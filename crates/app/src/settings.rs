@@ -338,7 +338,7 @@ fn general_tab(ui: &mut egui::Ui, d: &mut SettingsDraft) {
     }
     match &d.ffmpeg_check.1 {
         Some(p) => ui.label(RichText::new(format!("✔ using {}", p.display())).color(theme::LIVE).small()),
-        None => ui.label(RichText::new("✖ not found — install with: winget install Gyan.FFmpeg").color(theme::MOTION).small()),
+        None => ui.label(RichText::new("✖ not found — put ffmpeg.exe next to tapestry.exe, or run: winget install Gyan.FFmpeg").color(theme::MOTION).small()),
     };
     ui.add_space(10.0);
 

@@ -713,7 +713,7 @@ impl TapestryApp {
                 .show(ctx, |ui| {
                     ui.horizontal_wrapped(|ui| {
                         ui.label(RichText::new("FFmpeg not found.").strong().color(theme::WARN));
-                        ui.label("Tapestry uses it for video. Install it in PowerShell with");
+                        ui.label("Tapestry uses it for video. Put ffmpeg.exe next to tapestry.exe (the release zip includes it), or install it in PowerShell with");
                         ui.code("winget install Gyan.FFmpeg");
                         if ui.small_button("Copy").clicked() {
                             ui.output_mut(|o| o.copied_text = "winget install Gyan.FFmpeg".into());
