@@ -36,7 +36,7 @@ motion). Nothing goes through the cloud, and firmware updates shouldn't break it
 
 For each camera: **Camera → ⚙ Settings → Advanced Settings → Camera Account**. Choose a
 username and password. This login is separate from your TP-Link account. Using the same
-login on all three cameras is fine.
+login on every camera is fine.
 
 While you're there, note each camera's **IP address** (**Settings → Device Info**). It's worth
 reserving those IPs in your router (look for "DHCP reservation" or "address reservation"),
@@ -55,7 +55,14 @@ winget install Gyan.FFmpeg
 
 Then open a **new** terminal window and check it with `ffmpeg -version`.
 
-### 3. Build and run
+### 3. Get Tapestry
+
+Download `tapestry.exe` from the [latest release](https://github.com/sinnu-guild/tapestry/releases/latest)
+and put it anywhere (e.g. `C:\Tools\Tapestry`). Right-click it and pin it to the taskbar or Start.
+Windows SmartScreen may warn about an unsigned app the first time: **More info → Run anyway**.
+
+<details>
+<summary>Or build it yourself</summary>
 
 You need Rust ([rustup.rs](https://rustup.rs)). If you already have it, run `rustup update`
 first. In this folder:
@@ -65,10 +72,12 @@ cargo run --release
 ```
 
 The first build downloads its dependencies and takes a few minutes. After that, the app is at
-`target\release\tapestry.exe`. Right-click it and pin it to the taskbar or Start.
+`target\release\tapestry.exe`.
 
-On first launch the Settings window opens. Add your three cameras (name, IP, Camera Account
-login) and press **Test connection** on each one. When all three show green ticks, press
+</details>
+
+On first launch the Settings window opens. Add your cameras (name, IP, Camera Account
+login) and press **Test connection** on each one. When they all show green ticks, press
 **Save & apply**.
 
 ---
@@ -145,3 +154,7 @@ crates/core   tapestry-core: ONVIF client, FFmpeg streams, recorder, clips, engi
 crates/app    tapestry: the window (egui/eframe).
 docs/         design notes.
 ```
+
+## License
+
+Dual-licensed under [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), at your option.
