@@ -3,6 +3,12 @@
 A desktop wall for your Tapo cameras. All of them live in one window you can alt-tab to,
 with pan/tilt, motion alerts, and clips saved to your PC.
 
+TP-Link has never made a Tapo app for Windows or Mac, and people have been
+[asking for one since 2020](https://community.tp-link.com/en/home/forum/topic/205220).
+Tapestry is a free, open-source answer for wired Tapo cameras on your home network.
+
+> Unofficial. Not affiliated with or endorsed by TP-Link. Tapo is a trademark of TP-Link.
+
 - **Live grid** of every camera (low-res streams, light on CPU), plus a "Today" card in the spare slot
 - **Open a camera** (click it, or press `1`–`9`) for the full-quality stream with:
   - **Pan/tilt**: hold the on-screen arrows, arrow keys or `WASD` (`Shift` = slow)
