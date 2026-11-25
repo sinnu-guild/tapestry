@@ -1,0 +1,21 @@
+Tapestry uses FFmpeg for all video and sound. For convenience, the release zip
+includes ffmpeg.exe, unmodified, from the FFmpeg 9.1 "essentials" build for
+Windows by Gyan Doshi:
+
+  https://www.gyan.dev/ffmpeg/builds/
+  https://github.com/GyanD/codexffmpeg/releases/tag/9.1
+
+That build of FFmpeg is licensed under the GNU General Public License v3; the
+full text is in FFMPEG-LICENSE.txt and the build details in FFMPEG-README.txt.
+
+Source code:
+  FFmpeg 9.1:   https://ffmpeg.org/releases/ffmpeg-9.1.tar.xz
+  This build:   https://github.com/FFmpeg/FFmpeg/commit/74e4393595
+  Libraries:    listed with versions in FFMPEG-README.txt
+
+Tapestry runs ffmpeg.exe as a separate program. Tapestry's own code is
+licensed under MIT OR Apache-2.0 (LICENSE-MIT, LICENSE-APACHE).
+
+You can delete ffmpeg.exe and use your own copy instead: put it next to
+tapestry.exe, install it with `winget install Gyan.FFmpeg`, or set its path in
+Settings -> General.

@@ -1,12 +1,20 @@
 name: release
 
 # Push a tag like v0.1.0 to build tapestry.exe and attach it to a GitHub Release.
+# The zip also carries ffmpeg.exe, so people don't have to install FFmpeg.
 on:
   push:
     tags: ["v*"]
 
 permissions:
   contents: write
+
+env:
+  # Pinned FFmpeg build (same builder as `winget install Gyan.FFmpeg`).
+  # To update: change the version, URL and the SHA-256 that gyan.dev publishes,
+  # and the version + source commit in packaging/FFMPEG-NOTICE.txt.
+  FFMPEG_URL: https://github.com/GyanD/codexffmpeg/releases/download/9.1/ffmpeg-9.1-essentials_build.zip
+  FFMPEG_SHA256: b9bbbb3acece000cbeec994f856649354e52c773807841e78908374b24d658fd
 
 jobs:
   windows:
@@ -17,13 +25,26 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo test -p tapestry-core --locked
       - run: cargo build --release --locked
+      - name: Fetch FFmpeg
+        shell: pwsh
+        run: |
+          Invoke-WebRequest $env:FFMPEG_URL -OutFile ffmpeg.zip
+          $hash = (Get-FileHash ffmpeg.zip -Algorithm SHA256).Hash.ToLower()
+          if ($hash -ne $env:FFMPEG_SHA256) { throw "FFmpeg zip SHA-256 mismatch: $hash" }
+          Expand-Archive ffmpeg.zip -DestinationPath ffmpeg
       - name: Package
         shell: pwsh
         run: |
+          $ff = Get-ChildItem ffmpeg -Directory | Select-Object -First 1
+          $stage = "stage/Tapestry"
+          New-Item -ItemType Directory $stage -Force | Out-Null
+          Copy-Item target/release/tapestry.exe, README.md, LICENSE-MIT, LICENSE-APACHE, packaging/FFMPEG-NOTICE.txt $stage
+          Copy-Item "$($ff.FullName)/bin/ffmpeg.exe" $stage
+          Copy-Item "$($ff.FullName)/LICENSE" "$stage/FFMPEG-LICENSE.txt"
+          Copy-Item "$($ff.FullName)/README.txt" "$stage/FFMPEG-README.txt"
           New-Item -ItemType Directory dist | Out-Null
           Copy-Item target/release/tapestry.exe dist/
-          Compress-Archive -Path target/release/tapestry.exe, README.md, LICENSE-MIT, LICENSE-APACHE `
-            -DestinationPath "dist/tapestry-${{ github.ref_name }}-windows-x64.zip"
+          Compress-Archive -Path $stage -DestinationPath "dist/tapestry-${{ github.ref_name }}-windows-x64.zip"
       - uses: softprops/action-gh-release@v2
         with:
           files: |
