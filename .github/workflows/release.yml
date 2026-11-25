@@ -1,0 +1,32 @@
+name: release
+
+# Push a tag like v0.1.0 to build tapestry.exe and attach it to a GitHub Release.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test -p tapestry-core --locked
+      - run: cargo build --release --locked
+      - name: Package
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory dist | Out-Null
+          Copy-Item target/release/tapestry.exe dist/
+          Compress-Archive -Path target/release/tapestry.exe, README.md, LICENSE-MIT, LICENSE-APACHE `
+            -DestinationPath "dist/tapestry-${{ github.ref_name }}-windows-x64.zip"
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/tapestry.exe
+            dist/tapestry-*.zip
+          generate_release_notes: true
